@@ -9,6 +9,7 @@ meta-sec.exe status --json
 meta-sec.exe audit [--json]
 meta-sec.exe watch [--json] [--interval S] [--max-polls N] [--confirm N]
 meta-sec.exe scan --quick [--dry-run] [--json]
+meta-sec.exe service status|events|install|uninstall|run   (MVP-4, see below)
 ```
 
 Exit codes today: `0` observation complete (`OBSERVED` or `OBSERVED_WITH_ISSUES`), `2` bad arguments or engine failure (diagnostic on stderr, nothing on stdout), `3` incomplete observation (`INCOMPLETE`). `status` never returns 1; `1` is returned by `audit` for a confirmed FAIL (see below).
@@ -143,10 +144,47 @@ The only side effect in the product. It is limited to a single **quick** scan th
 
 **Known limits.** The gate is a human-intent control, not a boundary against code already running as the same user: such code could call the WMI method itself. A ConPTY/pseudo-console that a program drives looks like a console. `elevated=false` only adds a warning to the prompt; the access-denied verdict comes from Windows. Whether `MSFT_MpScan.Start` blocks until the scan ends, and what it returns on a given build, is handled generically (semi-synchronous call, timestamps as ground truth) but was **not observed on a real Defender-primary machine**.
 
+## `service` (MVP-4, optional background observer)
+
+```powershell
+meta-sec.exe service status [--json]
+meta-sec.exe service events [--json] [--limit N]          # N: 1..200, default 50
+meta-sec.exe service install [--dry-run]                   # typed approval + Administrator
+meta-sec.exe service uninstall [--dry-run]                 # typed approval + Administrator
+meta-sec.exe service run --console [--data-dir PATH] [--pipe-name NAME] [--interval S] [--confirm N] [--max-polls N]
+meta-sec.exe service run --scm                             # internal: the entry the Service Control Manager starts; not for humans
+```
+Same strict parser as `watch`/`scan`: no duplicate flags, strict integers, unknown flags are errors (exit 2, diagnostic on stderr, stdout empty), echoed arguments are sanitized. `--data-dir` and `--max-polls` / `--interval` / `--confirm` are valid only with `run --console`; `run --scm` accepts no other option. `--pipe-name NAME` (1-64 characters from `A-Z a-z 0-9 - _ .`, no backslash) selects the pipe `\\.\pipe\NAME` for `run --console` and, as a development aid, for `status`/`events` talking to such an observer. `--data-dir` is 1-260 characters without control characters. Defaults: pipe `MetaSecAgent`, interval 30 s, confirm 2.
+
+The service is **optional**: every standalone command works without it. It only observes (the same read-only checks as `watch`) and keeps small change events in a local SQLite file; it never changes a setting and never starts a scan.
+
+**`service status` exit codes** (the observation is the result, so "not installed" is not an error):
+| Situation | `verdict` | `overall` | Exit |
+|---|---|---|---|
+| Not installed | `NOT_INSTALLED` | `OBSERVED` | 0 (message: `service is not installed; standalone commands (status/audit/watch/scan) work without it`) |
+| Installed, stopped | `STOPPED` | `OBSERVED` | 0 |
+| Running, pipe answers, no errors | `RUNNING` | `OBSERVED` | 0 |
+| Running, service reports store/snapshot errors | `RUNNING_WITH_ISSUES` | `OBSERVED_WITH_ISSUES` | 0 |
+| Start/stop pending | `PENDING` | `INCOMPLETE` | 3 |
+| Running but the status pipe is unreachable / denied / returns garbage | `IPC_UNAVAILABLE` | `INCOMPLETE` | 3 (reason in `message`) |
+| Service Control Manager query failed (e.g. access denied) | `QUERY_FAILED` | `INCOMPLETE` | 3 |
+| Paused / unknown state | `UNEXPECTED_STATE` | `INCOMPLETE` | 3 |
+
+`service status --json` (own document, `schema_version` 1, `"command":"service status"`, one line): `product, version, mode, observed_at_utc, service{name, query_ok, query_error, installed, run_state, start_type, account, binary_path, binary_matches_cli}, ipc{reachable, reach, reason, [health, state, started_utc, last_observation_utc, polls, events_total, store_errors, snapshot_errors, last_error, service_overall, service_version]}, verdict, message, overall`. `binary_path` is shown only when installed, sanitized, with the user-profile segment redacted (`C:\Users\<user>\...`). Additive changes only.
+
+`service events` prints the newest events first (`"command":"service events"`: `limit, reach, reason, truncated, count, events[{id, kind, observed_at_utc, first_observed_at_utc, check_id, from, to, confirmations, source, error_code, evidence{}}], overall`). Event kinds: `change`, `observation_lost`, `observation_restored`, `check_added`, `check_removed`, `service_started`, `service_stopped`. An event with `evidence.detected_after_restart = "true"` describes a change that happened while the service was not running (found by comparing the first poll with the persisted state). Exit 0 when read, 3 when the service cannot be reached.
+
+`service install` / `uninstall`: the human must type exactly `INSTALL SERVICE` / `UNINSTALL SERVICE` on a real console (same rules and refusal reasons as `scan`; refused = exit 4, bad args = 2, `--dry-run` only checks). See [SECURITY.md](SECURITY.md).
+
+### Event store (local, bounded)
+SQLite file (`PRAGMA user_version` schema, migrations in a transaction, a newer version is refused). Tables `events`, `check_state` (last confirmed state per check: the restart checkpoint), `kv` (cursor and counters). Events are idempotent (unique `dedupe_key`), so the same event is never stored twice after a crash. After a restart the observer loads `check_state`: the same state produces no event (nothing is replayed); a different state is reported once, debounced by `--confirm` polls, flagged `detected_after_restart`. **Quota:** at most 10000 rows and 16 MiB by default; beyond that the oldest rows are deleted in batches and the file can never grow past the cap (`max_page_count`); if even that fails the failure is reported (`store_errors`, `last_error`), never dropped silently. Stored text is truncated (check id 128, evidence key 64 / value 256, 16 pairs) and holds no file content or secrets.
+
+### Local IPC protocol (read-only)
+One request line, ASCII, at most 128 bytes: `STATUS`, `HEALTH`, `EVENTS [n]` (n 1..200, default 50), ending in `\n` (or `\r\n`). Nothing else exists: no write, scan, policy or configuration verb. Anything else is rejected with a typed code (`EMPTY_REQUEST`, `REQUEST_TOO_LONG`, `NO_NEWLINE`, `EMBEDDED_NUL`, `NON_ASCII`, `CONTROL_CHARACTER`, `UNKNOWN_COMMAND`, `EXTRA_TOKENS`, `BAD_ARGUMENT`) and the offending bytes are never echoed. The reply is one JSON line (`"command":"service-ipc"`, `schema_version` 1, `ok`, `data` or `error`), at most 256 KiB; `EVENTS` drops the oldest events first and sets `truncated:true`. The client validates every reply strictly and treats an invalid one as "unreachable".
+
 Future:
 ```text
 meta-sec threats list
-meta-sec service status
 meta-sec policy check
 meta-sec fix --dry-run
 meta-sec center join
@@ -156,4 +194,4 @@ meta-center devices list
 meta-center alerts list
 ```
 
-JSON stdout only for `--json`; diagnostics on stderr. Stable schema is described above. Never invent `PROTECTED` from missing observations. Exit: 0 usable read, 1 confirmed audit finding, 2 command error, 3 incomplete observation, 4 scan refused (`scan` only). Commands with side effects require explicit human approval; no arbitrary remote shell.
+JSON stdout only for `--json`; diagnostics on stderr. Stable schema is described above. Never invent `PROTECTED` from missing observations. Exit: 0 usable read, 1 confirmed audit finding, 2 command error, 3 incomplete observation, 4 refused side-effect action (`scan`, `service install/uninstall`). Commands with side effects require explicit human approval; no arbitrary remote shell.

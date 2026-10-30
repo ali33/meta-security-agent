@@ -23,3 +23,11 @@ Required chain: Agent -> unique identity -> least privilege -> sandbox -> action
 - **Minimal scope:** one quick scan; no path argument, no full/custom scan, no remediation, quarantine or configuration change; no network.
 - **Honest outcome:** success is claimed only when Defender's own timestamps show a new completed scan; access denied, errors, timeout and Ctrl+C are reported as such. The tool cannot cancel a scan it started.
 - **Not a boundary against same-user code:** a process already running as the user can call the same WMI method; the gate defends against accidental and scripted invocation of *this tool*, not against malware with the user's rights.
+
+## Background service (MVP-4)
+The service is optional and read-only: it runs the same observation as `watch` and stores small change events.
+- **Install/uninstall are approved changes:** `service install` / `service uninstall` need the exact phrase `INSTALL SERVICE` / `UNINSTALL SERVICE` typed on a real console (same state machine as the scan approval, `evaluate_approval(in, phrase)`), plus Administrator rights; `--dry-run` only checks. Refused = exit 4.
+- **Read-only IPC:** the pipe protocol has exactly three verbs (`STATUS`, `HEALTH`, `EVENTS [n]`); requests are one ASCII line of at most 128 bytes, strictly parsed, never echoed back; replies are capped at 256 KiB and validated by the client. A unit test pins the verb allowlist, so adding a write/scan/policy verb is a visible, reviewed change. Pipe ACL and server identity checks belong to the Windows layer.
+- **Store:** parameterized SQL only, `trusted_schema=OFF`, defensive mode, extension loading compiled out, `synchronous=FULL`. No file content or secrets are stored; every field is truncated. Bounded by rows and bytes (oldest rows rotate out); a database written by a newer version is refused (fail closed); a corrupt file is a clean error, never a crash or silent data loss.
+- **Failures are visible:** store failures are counted and exposed (`store_errors`, `last_error` in `service status`), not swallowed.
+- **Not a boundary against same-user/admin code:** an administrator can stop the service or edit its database; the log is not tamper-proof (it is local evidence, not an audit trail against the machine owner).
