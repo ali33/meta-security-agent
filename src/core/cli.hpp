@@ -5,7 +5,7 @@
 
 namespace metasec {
 
-enum class Command { Help, Version, Status, Audit, Watch, Invalid };
+enum class Command { Help, Version, Status, Audit, Watch, Scan, Invalid };
 
 struct ParsedArgs {
     Command command = Command::Invalid;
@@ -14,6 +14,8 @@ struct ParsedArgs {
     int interval_seconds = 30;
     int max_polls = 0;  // 0 = until interrupted
     int confirm_polls = 2;
+    // scan only
+    bool dry_run = false;
     std::string error;  // set when command == Invalid
 };
 

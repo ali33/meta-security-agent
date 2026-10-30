@@ -1,9 +1,11 @@
 #pragma once
 #include <chrono>
+#include <functional>
 #include <string>
 #include <vector>
 
 #include "../core/audit.hpp"
+#include "../core/scan.hpp"
 #include "../core/types.hpp"
 
 namespace metasec::win {
@@ -47,5 +49,16 @@ StatusReport collect_status(std::chrono::system_clock::time_point now);
 
 // status data plus the registered-AV list, for `audit`. Requires a live ComApartment.
 AuditInput collect_audit_input(std::chrono::system_clock::time_point now);
+
+// ---- scan (MVP-3). Each needs a live ComApartment on the calling thread. ----
+// Read-only: AMRunningMode and QuickScan{Start,End}Time from MSFT_MpComputerStatus.
+DefenderScanObservation defender_scan_observation();
+// THE side effect: MSFT_MpScan.Start(ScanType=quick). Call only after the gate and approval passed
+// (core run_scan guarantees this). Waits up to `timeout_seconds`; `stop_requested` is polled.
+StartResult start_defender_quick_scan(int timeout_seconds, const std::function<bool()>& stop_requested);
+// Prompts on the real console and reads one line; never prompts or reads unless stdin and stderr are consoles.
+ApprovalInput console_approval(const std::string& prompt);
+std::string current_actor();   // the Windows account (domain and user) of this process
+bool process_elevated();
 
 }  // namespace metasec::win

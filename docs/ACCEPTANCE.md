@@ -76,3 +76,21 @@ Boxes stay unchecked until a human accepts. Details and raw output in [evidence/
 | Resource use over time | PASS on one 130-poll run, see evidence (handles/private bytes flat; CPU low). Not a soak test |
 | Windows Server (WSC absent), elevated run, second machine | NOT TESTED (CI on windows-latest runs the e2e cases, which accept exit 0 or 3) |
 | Read-only, no network, no persistence | by design; no new Windows API besides `SetConsoleCtrlHandler` and an event for the stop signal |
+
+
+## MVP-3 status record (2026-10-30, branch `feat/mvp3-scan`, from `main` at `04a7978`)
+Boxes stay unchecked until a human accepts. Details and raw output in [evidence/mvp3-win11.md](evidence/mvp3-win11.md).
+
+| Item (HANDOFF section F, MVP 3: "Explicit local approval, real status and errors, not a fake scan") | Result |
+|---|---|
+| `meta-sec scan --quick` exists, quick scan only, `--dry-run` available | PASS (CLI, unit and e2e) |
+| Fail-closed gate: Defender `AMRunningMode` exactly `Normal`; passive / not running / unknown / unreadable refused with reason and the active AV named | PASS (pure function, table-tested) and PASS on the real machine (Defender `Not running`, Bitdefender active: exit 4, named) |
+| Explicit local approval: typed phrase on a real console; stdin redirect, EOF, wrong text, no visible prompt all refused; no bypass flag | PASS (state machine unit tests; sweep proving `Start` is called iff gate and approval pass; e2e with the exact phrase on redirected stdin: exit 4, nothing started). Typing on a real console: **NOT exercised** by automation |
+| Actor and time recorded | PASS in unit tests (fake actor); real actor value redacted in evidence |
+| Real status and errors, not a fake scan: HRESULT / ReturnValue reported, access denied reported as a permission error, success only if Defender timestamps show a new completed scan | PASS in unit tests (outcome table). **NOT verified against a real Defender**: no available machine has Defender as the primary engine |
+| Real scan on Defender-primary machine, elevated | **NOT TESTED** (this machine: non-admin, Defender not running, Bitdefender) |
+| Access-denied path against the real API | **NOT TESTED** (the gate refuses first on this machine) |
+| `MSFT_MpScan.Start` blocking semantics and cancel behaviour on a real build | **NOT TESTED**; handled generically; Ctrl+C stops waiting only |
+| CI never starts a real scan | PASS by construction: e2e feeds the phrase on a redirected stdin and asserts exit 4 / `start.attempted=false`; no test provides a console |
+| Automated tests incl. negative; bad args -> exit 2 | PASS: see evidence for counts |
+| Windows Server, second machine | NOT TESTED |

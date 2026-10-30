@@ -14,6 +14,7 @@ add_library(metasec_core STATIC
   src/core/interpret.cpp
   src/core/audit.cpp
   src/core/watch.cpp
+  src/core/scan.cpp
   src/core/render.cpp
   src/core/cli.cpp)
 target_include_directories(metasec_core PUBLIC src)
@@ -25,8 +26,9 @@ add_library(metasec_win STATIC
   src/win/wsc_win.cpp
   src/win/defender_win.cpp
   src/win/av_products_win.cpp
+  src/win/scan_win.cpp
   src/win/collect_win.cpp)
-target_link_libraries(metasec_win PUBLIC metasec_core ole32 oleaut32 wbemuuid)
+target_link_libraries(metasec_win PUBLIC metasec_core ole32 oleaut32 wbemuuid secur32)
 
 add_executable(meta-sec src/main.cpp)
 target_link_libraries(meta-sec PRIVATE metasec_win)
@@ -75,12 +77,20 @@ if(BUILD_TESTING)
     COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:metasec_watch_tests>
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/watch_ndjson_roundtrip.cmake)
 
+  add_executable(metasec_scan_tests tests/test_scan.cpp)
+  target_link_libraries(metasec_scan_tests PRIVATE metasec_core)
+  target_compile_definitions(metasec_scan_tests PRIVATE NOMINMAX)
+  if(MSVC)
+    target_compile_options(metasec_scan_tests PRIVATE /W4 /WX /EHsc /utf-8 /permissive-)
+  endif()
+  add_test(NAME scan_unit COMMAND metasec_scan_tests)
+
   add_test(NAME json_roundtrip
     COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:metasec_tests>
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/json_roundtrip.cmake)
 
   # End-to-end tests drive the real executable; JSON validity is checked by CMake's own parser.
-  foreach(mode help version status_text status_json audit_text audit_json audit_bad_flag watch_text watch_json watch_bad_args bad_command bad_flag no_args)
+  foreach(mode help version status_text status_json audit_text audit_json audit_bad_flag watch_text watch_json watch_bad_args scan_dry_run scan_json scan_no_approval scan_bad_args bad_command bad_flag no_args)
     add_test(NAME cli_${mode}
       COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:meta-sec> -DMODE=${mode}
               -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_check.cmake)

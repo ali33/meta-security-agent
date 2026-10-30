@@ -15,7 +15,7 @@ Strategy: standalone first, C++ CLI first, Windows first; Center as an optional 
 | 8 | 7–10 days | Multi-agent Center **CLI** | `meta-center devices list` | >=3 enrolled lab endpoints, RBAC and log |
 | 9 | follow-on | Linux Agent, later web | Linux CLI live demo | Cross-platform tests and separate web acceptance |
 
-**Progress:** MVP 0 (`status`, PR #2), MVP 1 (`audit`, PR #3) and MVP 2 (`watch`, branch `feat/mvp2-watch`) are implemented and tested on one Windows 11 client; none is human-accepted. MVP 1 lab validation of weak configurations used fixtures, not a weakened real machine ([evidence](evidence/mvp1-win11.md)). MVP 2 change detection is proven with injected fake snapshots, not by changing a real setting ([evidence](evidence/mvp2-win11.md)). Windows Server is untested.
+**Progress:** MVP 0 (`status`, PR #2), MVP 1 (`audit`, PR #3) and MVP 2 (`watch`) and MVP 3 (`scan --quick`, branch `feat/mvp3-scan`) are implemented and tested on one Windows 11 client; none is human-accepted. MVP 1 lab validation of weak configurations used fixtures, not a weakened real machine ([evidence](evidence/mvp1-win11.md)). MVP 2 change detection is proven with injected fake snapshots, not by changing a real setting ([evidence](evidence/mvp2-win11.md)). MVP 3 refusal paths are verified on a real machine (Defender not running, non-admin); a real scan was never run, because no available machine has Defender as the primary engine ([evidence](evidence/mvp3-win11.md)). Windows Server is untested.
 
 Every MVP must provide: working build, real on-device observation, repeatable demonstration, at least one negative test, security review, release notes and recovery instructions. UI and infrastructure are deferred intentionally.
 

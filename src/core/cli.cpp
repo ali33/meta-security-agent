@@ -62,6 +62,30 @@ ParsedArgs parse_watch(const std::vector<std::string_view>& args) {
     return p;
 }
 
+// scan --quick [--dry-run] [--json]: --quick is mandatory (the only scan type), flags may not repeat.
+ParsedArgs parse_scan(const std::vector<std::string_view>& args) {
+    ParsedArgs p;
+    bool quick = false;
+    for (std::size_t i = 1; i < args.size(); ++i) {
+        if (args[i] == "--quick" && !quick) {
+            quick = true;
+        } else if (args[i] == "--dry-run" && !p.dry_run) {
+            p.dry_run = true;
+        } else if (args[i] == "--json" && !p.json) {
+            p.json = true;
+        } else {
+            p.error = "unexpected argument: " + sanitize_for_display(args[i]);
+            return p;
+        }
+    }
+    if (!quick) {
+        p.error = "scan needs --quick (the only scan type supported)";
+        return p;
+    }
+    p.command = Command::Scan;
+    return p;
+}
+
 }  // namespace
 
 ParsedArgs parse_args(const std::vector<std::string_view>& args) {
@@ -100,21 +124,25 @@ ParsedArgs parse_args(const std::vector<std::string_view>& args) {
         return p;
     }
     if (cmd == "watch") return parse_watch(args);
+    if (cmd == "scan") return parse_scan(args);
     p.error = "unknown command: " + sanitize_for_display(cmd);
     return p;
 }
 
 std::string usage_text(const std::string& version) {
-    return std::string(kProduct) + " v" + version + " (Standalone, read-only)\n" +
+    return std::string(kProduct) + " v" + version + " (Standalone; read-only except an approved scan)\n" +
            "Usage:\n"
            "  meta-sec status [--json]   Observe firewall and antivirus state\n"
            "  meta-sec audit [--json]    Check settings against rules (PASS/FAIL/UNKNOWN)\n"
            "  meta-sec watch [--json] [--interval S] [--max-polls N] [--confirm N]\n"
            "                             Report status changes until Ctrl+C (--json: one JSON per line)\n"
+           "  meta-sec scan --quick [--dry-run] [--json]\n"
+           "                             Start ONE Defender quick scan after typed local approval (--dry-run: check only)\n"
            "  meta-sec --version\n"
            "  meta-sec --help\n"
            "Exit codes: 0 ok, 1 audit violation, 2 command/engine error, "
-           "3 incomplete observation (watch: judged on the last poll)\n";
+           "3 incomplete observation (watch: judged on the last poll; scan: not confirmed), "
+           "4 scan refused (not applicable or not approved)\n";
 }
 
 std::string sanitize_for_display(std::string_view s) {
