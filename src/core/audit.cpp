@@ -223,12 +223,17 @@ Finding rule_active_av(const AuditInput& in) {
             if (a == AvActivity::On) {
                 ++on;
                 if (!on_names.empty()) on_names += "; ";
-                on_names += p.name;
+                on_names += p.name.empty() ? "(unnamed)" : p.name;
             } else if (a == AvActivity::Unrecognized) {
                 ++unrecognized;
             }
         }
         // B. A registered product is ON (vendor self-reported through Security Center).
+        // Contradiction: Defender is the primary engine and reads as off, yet some entry is ON
+        // (typically Defender's own registration). Do not credit that entry as another engine.
+        const bool defender_primary_off_b = mode && *mode == "Normal" && (av_s == State::Disabled || rt_s == State::Disabled);
+        if (on > 0 && defender_primary_off_b)
+            return set_unknown(f, "Defender is the primary engine and off, but a registered product reads ON (possibly Defender's own entry)");
         if (on > 0) {
             f.result = RuleResult::Pass;
             f.evidence.emplace_back("active_engine", on_names);
@@ -237,6 +242,12 @@ Finding rule_active_av(const AuditInput& in) {
         }
         if (unrecognized > 0)
             return set_unknown(f, "a registered antivirus product has an unrecognized productState");
+        // No product is ON. Contradictory evidence is UNKNOWN, not FAIL: Security Center says an
+        // antivirus is healthy, or Defender is passive (which implies another engine) but none is listed.
+        if (wsc_s == State::Good)
+            return set_unknown(f, "Security Center reports healthy antivirus but no registered product reads ON");
+        if (ap.products.empty() && (av_s == State::Passive || rt_s == State::Passive))
+            return set_unknown(f, "Defender is passive but no antivirus product is registered");
         // Every registered product (possibly none) is recognized and not ON. Without a usable
         // Defender reading we cannot rule out that Defender is the active engine.
         const bool no_defender_provider = av_s == State::NotSupported && rt_s == State::NotSupported;

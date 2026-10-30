@@ -249,17 +249,61 @@ void test_active_av() {
     }
     // ... but not when that product is off, snoozed or expired (FAIL, with evidence).
     for (long long st : {kOff, kSnoozed, kExpired}) {
-        Finding f = rule_active_av(third_party(st));
+        AuditInput t = third_party(st);
+        // Security Center GOOD while no product reads ON is contradictory: UNKNOWN, not FAIL.
+        CHECK(rule_active_av(t).result == RuleResult::Unknown);
+        set_check(t, mk(kIdWsc, State::Poor));
+        Finding f = rule_active_av(t);
         CHECK(f.result == RuleResult::Fail);
         CHECK(f.severity == Severity::High);
         CHECK(has_evidence(f, "registered_products", "2"));
         check_shape(f);
     }
-    // Passive Defender, nothing registered at all: FAIL.
+    // Passive Defender, nothing registered at all: contradictory (passive implies another engine),
+    // so UNKNOWN even when Security Center agrees nothing is healthy.
     {
         AuditInput in = third_party();
         in.av_products = observed({});
+        CHECK(rule_active_av(in).result == RuleResult::Unknown);
+        set_check(in, mk(kIdWsc, State::Poor));
+        CHECK(rule_active_av(in).result == RuleResult::Unknown);
+    }
+    // Defender not running, no AV registered, Security Center not healthy: FAIL.
+    {
+        AuditInput in = healthy();
+        DefenderRaw raw = normal_raw();
+        raw.running_mode = "Not running";
+        set_defender(in, raw, State::NotMonitored);  // -> DISABLED
+        set_check(in, mk(kIdWsc, State::NotMonitored));
+        in.av_products = observed({});
         CHECK(rule_active_av(in).result == RuleResult::Fail);
+        set_check(in, mk(kIdWsc, State::Good));  // contradiction -> UNKNOWN
+        CHECK(rule_active_av(in).result == RuleResult::Unknown);
+    }
+    // Defender is primary and off, but the list has an ON entry (Defender's own registration?):
+    // never credited as another engine.
+    {
+        AuditInput in = healthy();
+        DefenderRaw raw = normal_raw();
+        raw.realtime_enabled = false;
+        set_defender(in, raw);
+        in.av_products = observed({{"Windows Defender", kOn}});
+        Finding f = rule_active_av(in);
+        CHECK(f.result == RuleResult::Unknown);
+        in.av_products = observed({{"Windows Defender", kOn}, {"Acme AV", kOn}});
+        CHECK(rule_active_av(in).result == RuleResult::Unknown);
+    }
+    // Unnamed product that is ON still gets a readable engine label.
+    {
+        AuditInput in = third_party();
+        in.av_products = observed({{"", kOn}});
+        CHECK(has_evidence(rule_active_av(in), "active_engine", "(unnamed)"));
+    }
+    // Truncated list (error TRUNCATED, Obs::Unknown) cannot produce FAIL or PASS.
+    {
+        AuditInput in = third_party();
+        in.av_products = unobserved(Obs::Unknown, "TRUNCATED");
+        CHECK(rule_active_av(in).result == RuleResult::Unknown);
     }
     // Passive Defender, list unavailable: UNKNOWN, never PASS (even though WSC says GOOD).
     for (Obs o : {Obs::Unknown, Obs::NotSupported}) {
@@ -294,6 +338,7 @@ void test_active_av() {
     {
         AuditInput in = healthy();
         set_defender_failure(in, State::NotSupported, "HRESULT:0x8004100E");
+        set_check(in, mk(kIdWsc, State::NotMonitored));
         in.av_products = observed({});
         CHECK(rule_active_av(in).result == RuleResult::Fail);
     }
@@ -304,14 +349,17 @@ void test_active_av() {
         raw.realtime_enabled = false;
         set_defender(in, raw);
         in.av_products = observed({{"Windows Defender", kOff}});
+        CHECK(rule_active_av(in).result == RuleResult::Unknown);  // WSC GOOD contradicts
+        set_check(in, mk(kIdWsc, State::Poor));
         CHECK(rule_active_av(in).result == RuleResult::Fail);
+        set_check(in, mk(kIdWsc, State::Good));
         in.av_products = unobserved(Obs::NotSupported, "HRESULT:0x8004100E");  // Server SKU
         Finding f = rule_active_av(in);
         CHECK(f.result == RuleResult::Fail);
         CHECK(has_evidence(f, "am_running_mode", "Normal"));
         raw.antivirus_enabled = false;
         set_defender(in, raw);
-        CHECK(rule_active_av(in).result == RuleResult::Fail);
+        CHECK(rule_active_av(in).result == RuleResult::Fail);  // list unavailable, Defender primary and off
     }
     // Defender not running, Security Center not healthy, list unavailable: FAIL.
     {
@@ -633,6 +681,13 @@ void test_render() {
     CHECK(t.find("Overall: NO_FINDINGS") != std::string::npos);
     CHECK(t.find("fix:") == std::string::npos);  // remediation is shown only for FAIL / UNKNOWN
 
+    {
+        AuditInput hostile = third_party();
+        hostile.av_products = observed({{std::string("Evil") + "\x1b[31m" + "\n" + "red", kOn}});
+        const std::string th = render_audit_text(run_audit(hostile), "1");
+        CHECK(th.find('\x1b') == std::string::npos);
+        CHECK(th.find("red") != std::string::npos);
+    }
     AuditInput in = healthy();
     set_check(in, mk(kIdFwPublic, State::Disabled));
     const std::string tf = render_audit_text(run_audit(in), "1");

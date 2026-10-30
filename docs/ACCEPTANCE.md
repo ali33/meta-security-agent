@@ -40,3 +40,21 @@ Boxes above stay unchecked until a human accepts. Evidence so far, details in [e
 | Elevated run, Windows Server, second machine | NOT TESTED |
 | No network/db, no setting changes | by design (read-only COM/WMI queries); no network code |
 | Automated negative test + redacted output + SHA | PASS |
+
+
+## MVP-1 status record (2026-10-30, branch `feat/mvp1-audit`, stacked on `feat/mvp0-build-defender-tests`)
+Boxes stay unchecked until a human accepts. Details and raw output in [evidence/mvp1-win11.md](evidence/mvp1-win11.md).
+
+| Item (HANDOFF section F, MVP 1) | Result |
+|---|---|
+| Visible goal: `meta-sec audit` finds weak settings, with rule id/version, PASS/FAIL/UNKNOWN/NOT_APPLICABLE, severity, remediation, evidence, provenance | PASS on one Windows 11 client (7 rules) |
+| At least six independently testable checks | PASS: 3 firewall profiles, WSC health (unknown handling), active AV engine (includes Defender PASSIVE + another AV on), Defender real-time, signature age. Each is a pure function in `src/core/audit.cpp` |
+| Signature freshness only from a reliable provider | PASS by design: Defender only, only when `AMRunningMode` is `Normal`; otherwise NOT_APPLICABLE/UNKNOWN. Threshold is the constant `kSignatureMaxAgeDays = 3` |
+| Every failure has evidence, severity and remediation | PASS (unit test `check_shape` on every FAIL; e2e checks the fields on every rule) |
+| UNKNOWN is never converted to PASS | PASS (negative tests, plus an invariant sweep over 4 x 4 x 6 x 9 x 6 combinations) |
+| Exit codes 0 / 1 / 2 / 3 | PASS (unit and e2e). Decision: FAIL (1) outranks UNKNOWN (3) |
+| Automated tests incl. negative | PASS: see counts in the evidence file |
+| Controlled secure/insecure lab profiles give correct findings | **PARTIAL.** Verified with fixture profiles loaded into the core (no OS setting was changed; the machine is non-admin and read-only by rule). **Not verified on a real lab machine with weakened firewall/Defender/AV** |
+| Real-OS run | PASS on Windows 11 Pro 10.0.26200, non-admin: all rules PASS/NOT_APPLICABLE, exit 0 (this machine is healthy, so no real FAIL was observed) |
+| Windows Server (`ROOT\SecurityCenter2` absent -> NOT_SUPPORTED path), elevated run, second machine | NOT TESTED |
+| Read-only, no network, no secrets | by design; WMI/COM queries only |

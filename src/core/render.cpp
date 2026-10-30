@@ -96,6 +96,25 @@ std::string render_status_text(const StatusReport& r, const std::string& version
 
 namespace {
 
+// Text mode only: vendor-supplied strings must not carry terminal control characters.
+// (JSON mode escapes them instead.) No truncation, unlike sanitize_for_display.
+std::string printable(std::string_view in) {
+    std::string out;
+    for (std::size_t i = 0; i < in.size(); ++i) {
+        const unsigned char c = static_cast<unsigned char>(in[i]);
+        if (c < 0x20 || c == 0x7F) {
+            out += '?';
+        } else if (c == 0xC2 && i + 1 < in.size() && static_cast<unsigned char>(in[i + 1]) >= 0x80 &&
+                   static_cast<unsigned char>(in[i + 1]) <= 0x9F) {
+            out += '?';
+            ++i;
+        } else {
+            out += static_cast<char>(c);
+        }
+    }
+    return out;
+}
+
 void put_str_array(std::string& o, const std::vector<std::string>& v) {
     o += '[';
     bool first = true;
@@ -168,7 +187,7 @@ std::string render_audit_text(const AuditReport& r, const std::string& version) 
     for (const auto& f : r.findings) {
         o += std::format("[{}] {} (v{}, {}) {}\n", to_string(f.result), f.rule_id, f.rule_version,
                          to_string(f.severity), f.title);
-        for (const auto& [k, v] : f.evidence) o += std::format("      {}: {}\n", k, v);
+        for (const auto& [k, v] : f.evidence) o += std::format("      {}: {}\n", printable(k), printable(v));
         if (f.result == RuleResult::Fail || f.result == RuleResult::Unknown)
             o += std::format("      fix: {}\n", f.remediation);
     }

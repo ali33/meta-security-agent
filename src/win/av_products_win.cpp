@@ -69,11 +69,12 @@ AvProductsObservation av_products_observation() {
         if (FAILED(hr)) return failed(hr);
         if (hr == WBEM_S_TIMEDOUT) return failed_code("TIMEOUT");
         if (returned == 0 || !obj) break;  // enumeration finished (an empty list is a valid answer)
+        // A truncated list is not a complete observation: a later entry might be the ON one.
+        if (out.products.size() >= kMaxProducts) return failed_code("TRUNCATED");
         const auto name = wmi::get_string(obj.Get(), L"displayName");
         const auto state = wmi::get_int(obj.Get(), L"productState");
         // A product we cannot read is not skipped silently: -1 decodes as UNRECOGNIZED.
         out.products.push_back({name.value_or(""), state.value_or(-1)});
-        if (out.products.size() >= kMaxProducts) break;
     }
     out.obs = Obs::Observed;
     return out;
