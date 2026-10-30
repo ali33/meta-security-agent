@@ -1,5 +1,6 @@
 #include "watch.hpp"
 
+#include <exception>
 #include <format>
 
 #include "json.hpp"
@@ -36,6 +37,17 @@ std::string evidence_json(const std::vector<std::pair<std::string, std::string>>
     return o + "}";
 }
 
+// Checks with a repeated id are shown once, the same way the tracker treats them (first wins).
+std::vector<const CheckResult*> unique_checks(const StatusReport& r) {
+    std::vector<const CheckResult*> out;
+    for (const auto& c : r.checks) {
+        bool dup = false;
+        for (const auto* p : out) dup = dup || p->check_id == c.check_id;
+        if (!dup) out.push_back(&c);
+    }
+    return out;
+}
+
 // Terminal-safe: control characters never reach the console.
 std::string printable(std::string_view s) {
     std::string o;
@@ -69,6 +81,7 @@ const char* to_string(WatchStop s) {
         case WatchStop::MaxPolls: return "max_polls";
         case WatchStop::Interrupted: return "interrupted";
         case WatchStop::OutputFailed: return "output_failed";
+        case WatchStop::Error: return "error";
     }
     return "max_polls";
 }
@@ -187,7 +200,8 @@ std::string render_watch_baseline_json(const StatusReport& r, const WatchOptions
     o += std::format(R"("interval_seconds":{},"confirm_polls":{},"checks":[)", opt.interval_seconds,
                      opt.confirm_polls);
     bool first = true;
-    for (const auto& c : r.checks) {
+    for (const auto* cp : unique_checks(r)) {
+        const CheckResult& c = *cp;
         if (!first) o += ',';
         first = false;
         o += std::format(R"({{"check_id":{},"state":{},"posture":{},"source":{},"error_code":{},"evidence":{}}})",
@@ -218,10 +232,12 @@ std::string render_watch_baseline_text(const StatusReport& r, const WatchOptions
     o += std::format("{} [BASELINE] host {} | {} {} ({}) | every {}s, confirm {} polls\n", r.observed_at_utc,
                      printable(r.hostname), r.platform.os, r.platform.version, r.platform.kind, opt.interval_seconds,
                      opt.confirm_polls);
-    for (const auto& c : r.checks)
+    for (const auto* cp : unique_checks(r)) {
+        const CheckResult& c = *cp;
         o += std::format("  {}: {} ({}){}\n", printable(c.check_id), to_string(c.state),
                          to_string(posture_of(c.state)),
                          c.error_code.empty() ? std::string() : " error " + printable(c.error_code));
+    }
     return o;
 }
 
@@ -253,43 +269,51 @@ std::string render_watch_stopped_text(const std::string& at_utc, const WatchResu
 WatchResult run_watch(const WatchOptions& opt, const WatchHooks& hooks, const std::string& version) {
     WatchResult res;
     WatchTracker tracker(opt.confirm_polls);
-    for (;;) {
-        if (hooks.stop_requested()) {
-            res.stop = WatchStop::Interrupted;
-            break;
-        }
-        const StatusReport r = hooks.snapshot();
-        ++res.polls;
-        res.last_overall = compute_overall(r.checks);
-        if (!tracker.has_baseline()) {
-            tracker.set_baseline(r);
-            const std::string line =
-                opt.json ? render_watch_baseline_json(r, opt, version) : render_watch_baseline_text(r, opt, version);
-            if (!hooks.emit(line)) {
-                res.stop = WatchStop::OutputFailed;
-                return res;
+    try {
+        for (;;) {
+            if (hooks.stop_requested()) {
+                res.stop = WatchStop::Interrupted;
+                break;
             }
-        } else {
-            for (const auto& ev : tracker.observe(r)) {
-                ++res.events;
-                if (!hooks.emit(opt.json ? render_watch_event_json(ev) : render_watch_event_text(ev))) {
-                    res.stop = WatchStop::OutputFailed;
-                    return res;
+            const StatusReport r = hooks.snapshot();
+            ++res.polls;
+            res.last_overall = compute_overall(r.checks);
+            bool ok = true;
+            if (!tracker.has_baseline()) {
+                tracker.set_baseline(r);
+                ok = hooks.emit(opt.json ? render_watch_baseline_json(r, opt, version)
+                                         : render_watch_baseline_text(r, opt, version));
+            } else {
+                for (const auto& ev : tracker.observe(r)) {
+                    ++res.events;
+                    if (!hooks.emit(opt.json ? render_watch_event_json(ev) : render_watch_event_text(ev))) {
+                        ok = false;
+                        break;
+                    }
                 }
             }
+            if (!ok) {
+                res.stop = WatchStop::OutputFailed;
+                break;
+            }
+            if (opt.max_polls > 0 && res.polls >= opt.max_polls) {
+                res.stop = WatchStop::MaxPolls;
+                break;
+            }
+            if (!hooks.wait(opt.interval_seconds)) {
+                res.stop = WatchStop::Interrupted;
+                break;
+            }
         }
-        if (opt.max_polls > 0 && res.polls >= opt.max_polls) {
-            res.stop = WatchStop::MaxPolls;
-            break;
-        }
-        if (!hooks.wait(opt.interval_seconds)) {
-            res.stop = WatchStop::Interrupted;
-            break;
-        }
+    } catch (const std::exception& e) {
+        res.stop = WatchStop::Error;
+        res.error = e.what();
     }
+    // Always try to close the stream. After an output failure this is best effort: the pipe
+    // may be gone, and then nobody is left to read the line anyway.
     const std::string at = hooks.now_utc();
-    if (!hooks.emit(opt.json ? render_watch_stopped_json(at, res) : render_watch_stopped_text(at, res)))
-        res.stop = WatchStop::OutputFailed;
+    const bool closed = hooks.emit(opt.json ? render_watch_stopped_json(at, res) : render_watch_stopped_text(at, res));
+    if (!closed && res.stop != WatchStop::Error) res.stop = WatchStop::OutputFailed;
     return res;
 }
 

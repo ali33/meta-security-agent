@@ -2,6 +2,7 @@
 // `metasec_watch_tests --emit-ndjson` prints a hostile NDJSON stream; CTest parses every line
 // with CMake's own JSON parser (tests/watch_ndjson_roundtrip.cmake).
 #include <cstdio>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -355,6 +356,9 @@ void test_loop_output_failure_stops() {
     const WatchResult r = run_watch(opts(6, 1), f.hooks(), "t");
     CHECK(r.stop == WatchStop::OutputFailed);
     CHECK(r.polls == 3);
+    // A closing line is still attempted (best effort) and names the reason.
+    CHECK(f.lines.size() == 2);
+    if (f.lines.size() == 2) CHECK(f.lines[1].find("\"reason\":\"output_failed\"") != std::string::npos);
     Fake g;
     g.script.push_back(report(0, fw(E)));
     g.fail_emit_at = 1;  // baseline
@@ -363,6 +367,38 @@ void test_loop_output_failure_stops() {
     h.script.push_back(report(0, fw(E)));
     h.fail_emit_at = 2;  // closing line
     CHECK(run_watch(opts(1, 1), h.hooks(), "t").stop == WatchStop::OutputFailed);
+}
+
+void test_loop_snapshot_exception_is_reported() {
+    Fake f;
+    f.script.push_back(report(0, fw(E)));
+    WatchHooks h = f.hooks();
+    int calls = 0;
+    auto inner = h.snapshot;
+    h.snapshot = [&] {
+        if (++calls == 3) throw std::runtime_error("wmi exploded");
+        return inner();
+    };
+    const WatchResult r = run_watch(opts(10, 2), h, "t");
+    CHECK(r.stop == WatchStop::Error && r.error == "wmi exploded");
+    CHECK(r.polls == 2);
+    CHECK(f.lines.size() == 2);  // baseline + closing line
+    if (f.lines.size() == 2) CHECK(f.lines[1].find("\"reason\":\"error\"") != std::string::npos);
+}
+
+void test_baseline_prints_duplicate_ids_once() {
+    Fake f;
+    f.script.push_back(report(0, {{"a", E}, {"a", D}, {"b", E}}));
+    run_watch(opts(1, 2), f.hooks(), "t");
+    CHECK(!f.lines.empty());
+    if (!f.lines.empty()) {
+        const std::string& b = f.lines[0];
+        std::size_t n = 0;
+        for (std::size_t p = b.find("\"check_id\":\"a\""); p != std::string::npos;
+             p = b.find("\"check_id\":\"a\"", p + 1))
+            ++n;
+        CHECK(n == 1);
+    }
 }
 
 void test_loop_exit_basis_is_last_poll() {
@@ -486,6 +522,8 @@ int main(int argc, char** argv) {
     test_loop_interrupted_in_wait();
     test_loop_interrupted_before_first_poll();
     test_loop_output_failure_stops();
+    test_loop_snapshot_exception_is_reported();
+    test_baseline_prints_duplicate_ids_once();
     test_loop_exit_basis_is_last_poll();
     test_loop_deterministic();
     test_args();

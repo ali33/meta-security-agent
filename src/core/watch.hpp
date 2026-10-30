@@ -89,7 +89,7 @@ struct WatchHooks {
     std::function<std::string()> now_utc;          // timestamp for the closing line
 };
 
-enum class WatchStop { MaxPolls, Interrupted, OutputFailed };
+enum class WatchStop { MaxPolls, Interrupted, OutputFailed, Error };
 const char* to_string(WatchStop s);
 
 struct WatchResult {
@@ -97,6 +97,7 @@ struct WatchResult {
     int polls = 0;
     int events = 0;                       // change events only (not baseline / stopped)
     std::optional<Overall> last_overall;  // of the last raw snapshot; empty if no poll happened
+    std::string error;                    // what() of the exception when stop == Error
 };
 
 WatchResult run_watch(const WatchOptions& opt, const WatchHooks& hooks, const std::string& version);

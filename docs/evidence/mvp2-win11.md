@@ -8,9 +8,9 @@ Captured 2026-10-30 from branch `feat/mvp2-watch` (from `main` 8410f93, code com
 | OS | Microsoft Windows 11 Pro, 10.0.26200 (client) |
 | Compiler | MSVC 19.44 (VS 2022 Build Tools), `/W4 /WX /EHsc /utf-8 /permissive- /sdl /guard:cf`; link `/guard:cf /CETCOMPAT /DEPENDENTLOADFLAG:0x800` |
 | Build system | CMake 4.0.2, MSBuild 17.14, "Visual Studio 17 2022" x64, Release |
-| Tests | ctest 19/19 passed: `core_unit`, `audit_unit`, `watch_unit` (5,857 checks), `json_roundtrip`, `audit_json_roundtrip`, `watch_ndjson_roundtrip`, and 13 end-to-end CLI cases including `cli_watch_text`, `cli_watch_json`, `cli_watch_bad_args` |
+| Tests | ctest 19/19 passed: `core_unit`, `audit_unit`, `watch_unit` (5,865 checks), `json_roundtrip`, `audit_json_roundtrip`, `watch_ndjson_roundtrip`, and 13 end-to-end CLI cases including `cli_watch_text`, `cli_watch_json`, `cli_watch_bad_args` |
 | Elevation | **Non-admin**. Elevated run: NOT tested |
-| `meta-sec.exe` SHA256 | `2cb16b04187a7145485682c7127d31fd04906e99d539a366f7117eb517c57216` |
+| `meta-sec.exe` SHA256 | `cd81c55e020cb7d11ee313cb68d250db389e0a06b545280e589c6752b6bba177` (final build after review fixes; the runs below on the earlier build `2cb16b04...` except the Ctrl+Break run, repeated on the final build: exit 0, 8 ms) |
 
 ## Gate: "One controlled change generates one timestamped alert, no replay storm"
 ### Controlled change: proven with injected snapshots only
@@ -42,7 +42,7 @@ META Security Agent v0.1.0 | Standalone | Read-only | Watch
 `meta-sec watch --json --interval 2 --max-polls 3`: exit 0, stderr 0 bytes, 2 lines (`baseline` with 6 checks, then `{"schema_version":1,"command":"watch","event":"stopped","observed_at_utc":"2026-10-30T05:51:43Z","reason":"max_polls","polls":3,"events":0}`).
 
 ### Stop and bad arguments
-- Ctrl+Break sent to a `watch --json --interval 2` process (Python `CREATE_NEW_PROCESS_GROUP` + `CTRL_BREAK_EVENT`): exit **0**, process gone 13 ms after the signal, stderr empty, last line `"event":"stopped","reason":"interrupted","polls":3`. Ctrl+C uses the same handler (`CTRL_C_EVENT` could not be delivered by the harness because the test shell ignores it; not separately observed).
+- Ctrl+Break sent to a `watch --json --interval 2` process (Python `CREATE_NEW_PROCESS_GROUP` + `CTRL_BREAK_EVENT`): exit **0**, process gone 13 ms (earlier build) / 8 ms (final build) after the signal, stderr empty, last line `"event":"stopped","reason":"interrupted","polls":3`. Ctrl+C uses the same handler (`CTRL_C_EVENT` could not be delivered by the harness because the test shell ignores it; not separately observed).
 - `watch --interval 0` -> exit 2, stderr `meta-sec: --interval must be an integer from 1 to 3600, got: 0` plus usage, stdout empty. `--confirm 11` likewise.
 
 ### Resource use (one run, `--interval 1 --max-polls 130`, ~130 s, sampled every 20 s)
@@ -60,4 +60,4 @@ Handles stay in 175..180 and private bytes in 5.4..6.3 MB with no monotonic grow
 ## What was NOT tested
 - A real weakened configuration and a real change-to-alert latency (above).
 - Windows Server / absence of Security Center (the e2e cases accept exit 0 or 3, so they should pass on `windows-latest`; not run there yet).
-- Elevated execution; a second machine; runs of hours or days; console close (`CTRL_CLOSE_EVENT`) behaviour.
+- Elevated execution; a second machine; runs of hours or days; console close (`CTRL_CLOSE_EVENT`: the handler waits up to 3 s for the closing line; implemented, not exercised). A snapshot exception mid-run is covered only by a unit test with a throwing fake.

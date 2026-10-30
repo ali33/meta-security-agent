@@ -65,7 +65,7 @@ Boxes stay unchecked until a human accepts. Details and raw output in [evidence/
 
 | Item (HANDOFF section F, MVP 2: "One controlled change generates one timestamped alert, no replay storm") | Result |
 |---|---|
-| `meta-sec watch` runs, polls the status collectors read-only, stops on Ctrl+C / Ctrl+Break or `--max-polls` | PASS on Windows 11 (non-admin). Ctrl+Break verified: stops within 13 ms, `stopped` line, exit 0, empty stderr |
+| `meta-sec watch` runs, polls the status collectors read-only, stops on Ctrl+C / Ctrl+Break or `--max-polls` | PASS on Windows 11 (non-admin). Ctrl+Break verified: stops within 8-13 ms, `stopped` line, exit 0, empty stderr |
 | One change -> exactly one timestamped event (`observed_at_utc`, `check_id`, `from`, `to`, evidence) | PASS with **injected fake snapshots** (`tests/test_watch.cpp`, pure `WatchTracker` + loop with hooks) |
 | Controlled change on a real lab machine | **NOT VERIFIED.** The machine is non-admin and read-only by rule; no firewall/Defender/AV setting was changed. The real run saw 0 changes in a healthy steady state |
 | No replay storm | PASS: baseline printed once; an unchanged state yields no line (unit tests, 20-poll steady loop, real 3-poll and 130-poll runs) |
