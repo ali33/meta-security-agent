@@ -53,7 +53,7 @@ Boxes stay unchecked until a human accepts. Details and raw output in [evidence/
 | Every failure has evidence, severity and remediation | PASS (unit test `check_shape` on every FAIL; e2e checks the fields on every rule) |
 | UNKNOWN is never converted to PASS | PASS (negative tests, plus an invariant sweep over 4 x 4 x 6 x 9 x 6 combinations) |
 | Exit codes 0 / 1 / 2 / 3 | PASS (unit and e2e). Decision: FAIL (1) outranks UNKNOWN (3) |
-| Automated tests incl. negative | PASS: see counts in the evidence file |
+| Automated tests incl. negative | PASS: ctest 14/14; core 180 checks, audit 79,909 checks (see evidence) |
 | Controlled secure/insecure lab profiles give correct findings | **PARTIAL.** Verified with fixture profiles loaded into the core (no OS setting was changed; the machine is non-admin and read-only by rule). **Not verified on a real lab machine with weakened firewall/Defender/AV** |
 | Real-OS run | PASS on Windows 11 Pro 10.0.26200, non-admin: all rules PASS/NOT_APPLICABLE, exit 0 (this machine is healthy, so no real FAIL was observed) |
 | Windows Server (`ROOT\SecurityCenter2` absent -> NOT_SUPPORTED path), elevated run, second machine | NOT TESTED |
