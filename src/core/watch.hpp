@@ -55,6 +55,9 @@ public:
     bool has_baseline() const { return baseline_; }
     // Feed the next snapshot; returns the events it confirmed, in report order (removed last).
     std::vector<WatchEvent> observe(const StatusReport& r);
+    // Currently confirmed state of every check that has one, in tracking order (the persisted
+    // checkpoint of the service). Checks that are absent are not listed.
+    std::vector<std::pair<std::string, State>> confirmed_states() const;
 
 private:
     struct Entry {
