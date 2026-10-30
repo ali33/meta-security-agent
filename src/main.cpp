@@ -194,6 +194,10 @@ int run_scan_command(const metasec::ParsedArgs& parsed, const std::string& versi
     hooks.actor = [] { return win::current_actor(); };
     hooks.elevated = [] { return win::process_elevated(); };
     hooks.now_utc = [] { return format_utc(std::chrono::system_clock::now()); };
+    hooks.now_epoch = [] {
+        return static_cast<long long>(std::chrono::duration_cast<std::chrono::seconds>(
+                                          std::chrono::system_clock::now().time_since_epoch()).count());
+    };
     hooks.start_quick_scan = [](int timeout_seconds) {
         // Ctrl+C only stops our waiting: the scan, once started, is not cancelled by this tool.
         // The handler exists only around the Start call; during the approval prompt Ctrl+C

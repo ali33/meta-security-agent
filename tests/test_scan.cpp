@@ -4,6 +4,7 @@
 // both pass. No test here touches the OS or can start a real scan.
 #include <algorithm>
 #include <cstdio>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -27,6 +28,7 @@ void check(bool ok, const char* expr, const char* file, int line) {
 #define CHECK(e) check((e), #e, __FILE__, __LINE__)
 
 constexpr long long kT1 = 1793363696;  // 2026-10-30T12:34:56Z
+constexpr long long kNB = kT1;          // "not before": when Start was called
 
 DefenderScanObservation def_obs(const char* mode, ScanTimes t = {}) {
     DefenderScanObservation o;
@@ -139,10 +141,10 @@ ApprovalInput typed(const std::string& line) {
 void test_approval() {
     CHECK(evaluate_approval(typed("START QUICK SCAN\r\n")).approved);
     CHECK(evaluate_approval(typed("START QUICK SCAN\n")).approved);
-    CHECK(evaluate_approval(typed("START QUICK SCAN")).approved);
-    CHECK(evaluate_approval(typed("START QUICK SCAN")).reason == "APPROVED");
+    CHECK(evaluate_approval(typed("START QUICK SCAN\n")).approved);
+    CHECK(evaluate_approval(typed("START QUICK SCAN\r\n")).reason == "APPROVED");
 
-    const char* wrong[] = {"", "\r\n", "y", "yes", "Y\r\n", "start quick scan", "START QUICK SCAN ", " START QUICK SCAN",
+    const char* wrong[] = {"START QUICK SCAN", "START QUICK SCAN\r", "START QUICK SCAN\n\n", "START QUICK SCAN\r\n\r\n", "", "\r\n", "y", "yes", "Y\r\n", "start quick scan", "START QUICK SCAN ", " START QUICK SCAN",
                            "START QUICK SCAN\r\nSTART QUICK SCAN", "START QUICK SCANX", "START QUICK", "START  QUICK SCAN",
                            "\x01", "START QUICK SCAN\x1a", "START QUICK SCAN\t"};
     for (const char* w : wrong) {
@@ -191,50 +193,54 @@ void test_outcome() {
     const ScanTimes running{kT1, kT1 - 86000};  // started, end time still the old one
     StartResult ok;  // exec ok, finished, status ok, no return value
 
-    CHECK(new_scan_visible(old_scan, new_scan));
-    CHECK(!new_scan_visible(old_scan, old_scan));
-    CHECK(!new_scan_visible(old_scan, std::nullopt));
-    CHECK(new_scan_visible(ScanTimes{}, new_scan));  // never scanned before
-    CHECK(!new_scan_visible(old_scan, ScanTimes{}));
+    CHECK(new_scan_visible(old_scan, new_scan, kNB));
+    CHECK(!new_scan_visible(old_scan, old_scan, kNB));
+    CHECK(!new_scan_visible(old_scan, std::nullopt, kNB));
+    CHECK(new_scan_visible(ScanTimes{}, new_scan, kNB));  // never scanned before
+    CHECK(!new_scan_visible(old_scan, ScanTimes{}, kNB));
+    // An older scan is never taken for ours, even when there was no previous timestamp.
+    CHECK(!new_scan_visible(ScanTimes{}, old_scan, kNB));
+    CHECK(!new_scan_visible(ScanTimes{}, ScanTimes{kT1 - 3, kT1 + 5}, kNB));  // beyond the 2 s slack
+    CHECK(new_scan_visible(ScanTimes{}, ScanTimes{kT1 - 2, kT1 + 5}, kNB));   // within the slack
 
-    CHECK(interpret_scan_outcome(ok, old_scan, new_scan) == ScanStatus::Completed);
-    CHECK(interpret_scan_outcome(ok, ScanTimes{}, new_scan) == ScanStatus::Completed);
+    CHECK(interpret_scan_outcome(ok, old_scan, new_scan, kNB) == ScanStatus::Completed);
+    CHECK(interpret_scan_outcome(ok, ScanTimes{}, new_scan, kNB) == ScanStatus::Completed);
     StartResult rv0 = ok;
     rv0.return_value = 0;
-    CHECK(interpret_scan_outcome(rv0, old_scan, new_scan) == ScanStatus::Completed);
+    CHECK(interpret_scan_outcome(rv0, old_scan, new_scan, kNB) == ScanStatus::Completed);
 
     // Success reported by the API but no new scan visible: never claimed as done.
-    CHECK(interpret_scan_outcome(ok, old_scan, old_scan) == ScanStatus::NotConfirmed);
-    CHECK(interpret_scan_outcome(ok, old_scan, std::nullopt) == ScanStatus::NotConfirmed);
+    CHECK(interpret_scan_outcome(ok, old_scan, old_scan, kNB) == ScanStatus::NotConfirmed);
+    CHECK(interpret_scan_outcome(ok, old_scan, std::nullopt, kNB) == ScanStatus::NotConfirmed);
     // New scan visible but no completion time yet.
-    CHECK(interpret_scan_outcome(ok, old_scan, running) == ScanStatus::StartedNotCompleted);
+    CHECK(interpret_scan_outcome(ok, old_scan, running, kNB) == ScanStatus::StartedNotCompleted);
 
     // Errors: access denied is a permission error; everything else is a failure. Never success.
     for (std::int32_t hr : {kAccessDenied, kWbemAccessDenied}) {
         StartResult a = ok;
         a.exec_hr = hr;
-        CHECK(interpret_scan_outcome(a, old_scan, new_scan) == ScanStatus::AccessDenied);  // even if a stale scan looks new
+        CHECK(interpret_scan_outcome(a, old_scan, new_scan, kNB) == ScanStatus::AccessDenied);  // even if a stale scan looks new
         StartResult b = ok;
         b.status_hr = hr;
-        CHECK(interpret_scan_outcome(b, old_scan, new_scan) == ScanStatus::AccessDenied);
+        CHECK(interpret_scan_outcome(b, old_scan, new_scan, kNB) == ScanStatus::AccessDenied);
     }
     StartResult f1 = ok;
     f1.exec_hr = kOtherFail;
-    CHECK(interpret_scan_outcome(f1, old_scan, new_scan) == ScanStatus::StartFailed);
+    CHECK(interpret_scan_outcome(f1, old_scan, new_scan, kNB) == ScanStatus::StartFailed);
     StartResult f2 = ok;
     f2.status_hr = kOtherFail;
-    CHECK(interpret_scan_outcome(f2, old_scan, new_scan) == ScanStatus::StartFailed);
+    CHECK(interpret_scan_outcome(f2, old_scan, new_scan, kNB) == ScanStatus::StartFailed);
     StartResult f3 = ok;
     f3.return_value = 5;
-    CHECK(interpret_scan_outcome(f3, old_scan, new_scan) == ScanStatus::StartFailed);
+    CHECK(interpret_scan_outcome(f3, old_scan, new_scan, kNB) == ScanStatus::StartFailed);
 
     // Timeout / Ctrl+C: honest "started but not seen to finish", or not confirmed.
-    for (WaitEnd w : {WaitEnd::TimedOut, WaitEnd::Interrupted}) {
+    for (WaitEnd w : {WaitEnd::TimedOut, WaitEnd::Interrupted, WaitEnd::NoCallResult}) {
         StartResult t = ok;
         t.wait = w;
-        CHECK(interpret_scan_outcome(t, old_scan, running) == ScanStatus::StartedNotCompleted);
-        CHECK(interpret_scan_outcome(t, old_scan, new_scan) == ScanStatus::StartedNotCompleted);  // never Completed
-        CHECK(interpret_scan_outcome(t, old_scan, old_scan) == ScanStatus::NotConfirmed);
+        CHECK(interpret_scan_outcome(t, old_scan, running, kNB) == ScanStatus::StartedNotCompleted);
+        CHECK(interpret_scan_outcome(t, old_scan, new_scan, kNB) == ScanStatus::StartedNotCompleted);  // never Completed
+        CHECK(interpret_scan_outcome(t, old_scan, old_scan, kNB) == ScanStatus::NotConfirmed);
     }
 
     // Exit-code contract.
@@ -255,6 +261,7 @@ struct Fake {
     ApprovalInput approval = typed("START QUICK SCAN\r\n");
     StartResult start;
     bool elevated = true;
+    int throw_on = -1;  // observe_defender throws on this 0-based call
     int observe_calls = 0, ask_calls = 0, start_calls = 0, start_timeout = 0;
     std::string last_prompt;
     int clock = 0;
@@ -262,6 +269,7 @@ struct Fake {
     ScanHooks hooks() {
         ScanHooks h;
         h.observe_defender = [this] {
+            if (observe_calls == throw_on) throw std::runtime_error("boom");
             const std::size_t i = std::min<std::size_t>(static_cast<std::size_t>(observe_calls++), defender.size() - 1);
             return defender[i];
         };
@@ -278,6 +286,7 @@ struct Fake {
             start_timeout = t;
             return start;
         };
+        h.now_epoch = [] { return kT1; };
         h.now_utc = [this] { return std::string("2026-10-30T00:00:0") + std::to_string(clock++ % 10) + "Z"; };
         return h;
     }
@@ -417,6 +426,21 @@ void test_run_failures_are_reported_not_hidden() {
         CHECK(r.status == ScanStatus::NotConfirmed && !r.after);
         CHECK(render_scan_text(r, "1").find("could not be re-read") != std::string::npos);
     }
+    {  // Exception while re-reading after Start: report is kept (a scan may be running).
+        Fake f;
+        f.defender = {def_obs("Normal", kOld)};
+        f.throw_on = 2;
+        const ScanReport r = run_scan({}, f.hooks());
+        CHECK(f.start_calls == 1 && r.status == ScanStatus::NotConfirmed && !r.after);
+    }
+    {  // Accepted but no call-result object: not an error, not a success.
+        Fake f;
+        f.defender = {def_obs("Normal", kOld), def_obs("Normal", kOld), def_obs("Normal", kNew)};
+        f.start.wait = WaitEnd::NoCallResult;
+        const ScanReport r = run_scan({}, f.hooks());
+        CHECK(r.status == ScanStatus::StartedNotCompleted && scan_exit_code(r.status) == 3);
+        CHECK(render_scan_json(r, "1").find("\"wait\":\"no_call_result\"") != std::string::npos);
+    }
     {  // Ctrl+C while waiting.
         Fake f;
         f.defender = {def_obs("Normal", kOld), def_obs("Normal", kOld), def_obs("Normal", ScanTimes{kT1, kOld.quick_end})};
@@ -430,7 +454,7 @@ void test_run_failures_are_reported_not_hidden() {
 void test_run_start_called_at_most_once_and_only_when_approved() {
     // Sweep: every combination of mode x approval; Start runs iff mode is Normal AND approval is valid.
     const char* modes[] = {"Normal", "Passive", "Not running", "normal", ""};
-    const char* lines[] = {"START QUICK SCAN\r\n", "START QUICK SCAN", "no", "", "start quick scan\r\n"};
+    const char* lines[] = {"START QUICK SCAN\r\n", "START QUICK SCAN\n", "no", "", "start quick scan\r\n"};
     for (const char* m : modes)
         for (const char* l : lines)
             for (int console = 0; console < 2; ++console) {

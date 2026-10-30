@@ -69,6 +69,7 @@ const char* wait_name(WaitEnd w) {
         case WaitEnd::Finished: return "finished";
         case WaitEnd::TimedOut: return "timed_out";
         case WaitEnd::Interrupted: return "interrupted";
+        case WaitEnd::NoCallResult: return "no_call_result";
     }
     return "finished";
 }
@@ -171,8 +172,14 @@ ApprovalDecision evaluate_approval(const ApprovalInput& in) {
         case ReadStatus::Interrupted: return {false, "INTERRUPTED"};
         case ReadStatus::Ok: break;
     }
+    // A line-mode console read always ends with the Enter key: require exactly one terminator.
     std::string line = in.line;
-    while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();
+    if (line.size() >= 2 && line.compare(line.size() - 2, 2, "\r\n") == 0)
+        line.resize(line.size() - 2);
+    else if (!line.empty() && line.back() == '\n')
+        line.pop_back();
+    else
+        return {false, "WRONG_CONFIRMATION"};
     if (line == kScanConfirmPhrase) return {true, "APPROVED"};
     return {false, "WRONG_CONFIRMATION"};
 }
@@ -218,19 +225,20 @@ int scan_exit_code(ScanStatus s) {
     return kExitError;
 }
 
-bool new_scan_visible(const ScanTimes& before, const std::optional<ScanTimes>& after) {
+bool new_scan_visible(const ScanTimes& before, const std::optional<ScanTimes>& after, long long not_before) {
     if (!after || !after->quick_start) return false;
+    if (*after->quick_start < not_before - kScanClockSlackSeconds) return false;
     return !before.quick_start || *after->quick_start > *before.quick_start;
 }
 
 ScanStatus interpret_scan_outcome(const StartResult& r, const ScanTimes& before,
-                                  const std::optional<ScanTimes>& after) {
+                                  const std::optional<ScanTimes>& after, long long not_before) {
     if (r.exec_hr < 0) return is_access_denied(r.exec_hr) ? ScanStatus::AccessDenied : ScanStatus::StartFailed;
     if (r.wait == WaitEnd::Finished) {
         if (r.status_hr < 0) return is_access_denied(r.status_hr) ? ScanStatus::AccessDenied : ScanStatus::StartFailed;
         if (r.return_value && *r.return_value != 0) return ScanStatus::StartFailed;
     }
-    if (!new_scan_visible(before, after)) return ScanStatus::NotConfirmed;
+    if (!new_scan_visible(before, after, not_before)) return ScanStatus::NotConfirmed;
     const bool ended = after->quick_end && *after->quick_end >= *after->quick_start;
     if (r.wait == WaitEnd::Finished && ended) return ScanStatus::Completed;
     return ScanStatus::StartedNotCompleted;
@@ -279,11 +287,17 @@ ScanReport run_scan(const ScanOptions& opt, const ScanHooks& h) {
     rep.before = def2.times;
 
     rep.start_attempted = true;
+    const long long not_before = h.now_epoch();
     rep.start = h.start_quick_scan(kScanWaitSeconds);
-    const DefenderScanObservation def3 = h.observe_defender();
-    if (def3.obs == Obs::Observed) rep.after = def3.times;
-    rep.new_scan_confirmed = new_scan_visible(rep.before, rep.after);
-    rep.status = interpret_scan_outcome(rep.start, rep.before, rep.after);
+    // A scan may be running now: a failure to re-read must not lose the report.
+    try {
+        const DefenderScanObservation def3 = h.observe_defender();
+        if (def3.obs == Obs::Observed) rep.after = def3.times;
+    } catch (...) {
+        rep.after.reset();
+    }
+    rep.new_scan_confirmed = new_scan_visible(rep.before, rep.after, not_before);
+    rep.status = interpret_scan_outcome(rep.start, rep.before, rep.after, not_before);
     rep.finished_at_utc = h.now_utc();
     return rep;
 }
@@ -369,7 +383,6 @@ std::string render_scan_text(const ScanReport& r, const std::string& version) {
     o += std::format("Observed: {}\n", r.observed_at_utc);
     o += std::format("Gate: {} ({}){}\n", r.gate.allowed ? "ALLOWED" : "REFUSED", r.gate.code,
                      r.gate.running_mode.empty() ? "" : " | Defender mode: " + printable(r.gate.running_mode));
-    if (!r.gate.allowed) o += "  " + printable(r.gate.message) + "\n";
     if (r.approval_asked) {
         o += std::format("Approval: {} ({})\n", r.approval.approved ? "GRANTED" : "NOT GRANTED", r.approval.reason);
         if (r.approval.approved)

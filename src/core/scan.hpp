@@ -81,7 +81,7 @@ std::string approval_prompt_text(const std::string& actor, const std::string& ru
 
 // ---- Start call and its interpretation -----------------------------------------------------
 
-enum class WaitEnd { Finished, TimedOut, Interrupted };
+enum class WaitEnd { Finished, TimedOut, Interrupted, NoCallResult };  // NoCallResult: accepted, but nothing to wait on
 
 struct StartResult {
     std::int32_t exec_hr = 0;                // HRESULT of the ExecMethod call itself
@@ -106,9 +106,12 @@ int scan_exit_code(ScanStatus s);
 // Pure: decide the outcome from the Start result and the before/after timestamps.
 // `after` is nullopt when Defender could not be re-read.
 ScanStatus interpret_scan_outcome(const StartResult& r, const ScanTimes& before,
-                                  const std::optional<ScanTimes>& after);
-// True when `after` shows a quick scan that began after `before` (strictly later start time).
-bool new_scan_visible(const ScanTimes& before, const std::optional<ScanTimes>& after);
+                                  const std::optional<ScanTimes>& after, long long not_before);
+// True when `after` shows a quick scan that began after `before` (strictly later start time) AND
+// not earlier than `not_before` (epoch seconds when we called Start, minus kScanClockSlackSeconds),
+// so an old scan can never be taken for ours.
+inline constexpr long long kScanClockSlackSeconds = 2;  // WMI timestamps are truncated to seconds
+bool new_scan_visible(const ScanTimes& before, const std::optional<ScanTimes>& after, long long not_before);
 
 // ---- Orchestration -------------------------------------------------------------------------
 
@@ -127,6 +130,7 @@ struct ScanHooks {
     // The ONLY side effect. Never called unless the gate and the approval both passed.
     std::function<StartResult(int timeout_seconds)> start_quick_scan;
     std::function<std::string()> now_utc;
+    std::function<long long()> now_epoch;  // UTC epoch seconds
 };
 
 struct ScanReport {

@@ -159,7 +159,7 @@ StartResult start_defender_quick_scan(int timeout_seconds, const std::function<b
     }
     r.exec_hr = hr;
     if (!call) {  // success without a call object: nothing to wait on, cannot report completion
-        r.status_hr = E_POINTER;
+        r.wait = WaitEnd::NoCallResult;
         return r;
     }
     CoSetProxyBlanket(call.Get(), RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE, nullptr, RPC_C_AUTHN_LEVEL_CALL,
@@ -201,15 +201,23 @@ ApprovalInput console_approval(const std::string& prompt) {
     // Fail closed before showing or reading anything: a pipe/file/NUL on stdin can never approve.
     if (!in.input_is_console || !in.output_is_console) return in;
 
+    // Drop type-ahead (e.g. a pasted multi-line command) BEFORE the prompt is shown, so only
+    // keystrokes typed after the human has seen the prompt can answer it.
+    DWORD old_mode = 0;
+    if (!GetConsoleMode(hin, &old_mode) || !FlushConsoleInputBuffer(hin)) {
+        in.read = ReadStatus::Error;
+        return in;
+    }
     const std::wstring wp = to_wide(prompt);
     DWORD written = 0;
     if (!WriteConsoleW(herr, wp.c_str(), static_cast<DWORD>(wp.size()), &written, nullptr)) {
         in.read = ReadStatus::Error;
         return in;
     }
-    DWORD old_mode = 0;
-    GetConsoleMode(hin, &old_mode);
-    SetConsoleMode(hin, ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT);
+    if (!SetConsoleMode(hin, ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT)) {
+        in.read = ReadStatus::Error;
+        return in;
+    }
     wchar_t buf[128];
     DWORD n = 0;
     const BOOL ok = ReadConsoleW(hin, buf, static_cast<DWORD>(std::size(buf)), &n, nullptr);
