@@ -94,4 +94,109 @@ std::string render_status_text(const StatusReport& r, const std::string& version
     return o;
 }
 
+namespace {
+
+// Text mode only: vendor-supplied strings must not carry terminal control characters.
+// (JSON mode escapes them instead.) No truncation, unlike sanitize_for_display.
+std::string printable(std::string_view in) {
+    std::string out;
+    for (std::size_t i = 0; i < in.size(); ++i) {
+        const unsigned char c = static_cast<unsigned char>(in[i]);
+        if (c < 0x20 || c == 0x7F) {
+            out += '?';
+        } else if (c == 0xC2 && i + 1 < in.size() && static_cast<unsigned char>(in[i + 1]) >= 0x80 &&
+                   static_cast<unsigned char>(in[i + 1]) <= 0x9F) {
+            out += '?';
+            ++i;
+        } else {
+            out += static_cast<char>(c);
+        }
+    }
+    return out;
+}
+
+void put_str_array(std::string& o, const std::vector<std::string>& v) {
+    o += '[';
+    bool first = true;
+    for (const auto& s : v) {
+        if (!first) o += ',';
+        first = false;
+        put_str(o, s);
+    }
+    o += ']';
+}
+
+}  // namespace
+
+std::string render_audit_json(const AuditReport& r, const std::string& version) {
+    std::string o;
+    o += '{';
+    o += "\"schema_version\":" + std::to_string(kSchemaVersion) + ',';
+    put_kv(o, "command", "audit"); o += ',';
+    put_kv(o, "product", kProduct); o += ',';
+    put_kv(o, "version", version); o += ',';
+    put_kv(o, "mode", "standalone"); o += ',';
+    put_kv(o, "hostname", r.hostname); o += ',';
+    put_kv(o, "observed_at_utc", r.observed_at_utc); o += ',';
+    o += "\"platform\":{";
+    put_kv(o, "os", r.platform.os); o += ',';
+    put_kv(o, "version", r.platform.version); o += ',';
+    put_kv(o, "kind", r.platform.kind);
+    o += "},\"rules\":[";
+    bool first = true;
+    for (const auto& f : r.findings) {
+        if (!first) o += ',';
+        first = false;
+        o += '{';
+        put_kv(o, "rule_id", f.rule_id); o += ',';
+        o += "\"rule_version\":" + std::to_string(f.rule_version) + ',';
+        put_kv(o, "title", f.title); o += ',';
+        put_kv(o, "result", to_string(f.result)); o += ',';
+        put_kv(o, "severity", to_string(f.severity)); o += ',';
+        put_kv(o, "remediation", f.remediation); o += ',';
+        o += "\"evidence\":{";
+        bool fe = true;
+        for (const auto& [k, v] : f.evidence) {
+            if (!fe) o += ',';
+            fe = false;
+            put_kv(o, k, v);
+        }
+        o += "},\"provenance\":{\"check_ids\":";
+        put_str_array(o, f.check_ids);
+        o += ",\"sources\":";
+        put_str_array(o, f.sources);
+        o += "}}";
+    }
+    const AuditSummary s = summarize(r);
+    o += "],\"summary\":{";
+    o += "\"pass\":" + std::to_string(s.pass) + ',';
+    o += "\"fail\":" + std::to_string(s.fail) + ',';
+    o += "\"unknown\":" + std::to_string(s.unknown) + ',';
+    o += "\"not_applicable\":" + std::to_string(s.not_applicable) + "},";
+    put_kv(o, "overall", to_string(audit_overall(r)));
+    o += "}\n";
+    return o;
+}
+
+std::string render_audit_text(const AuditReport& r, const std::string& version) {
+    std::string o;
+    o += std::format("{} v{} | Standalone | Read-only | Audit\n", kProduct, version);
+    o += std::format("Host: {}\n", r.hostname);
+    o += std::format("Platform: {} {} ({})\n", r.platform.os, r.platform.version, r.platform.kind);
+    o += std::format("Observed: {}\n", r.observed_at_utc);
+    for (const auto& f : r.findings) {
+        o += std::format("[{}] {} (v{}, {}) {}\n", to_string(f.result), f.rule_id, f.rule_version,
+                         to_string(f.severity), f.title);
+        for (const auto& [k, v] : f.evidence) o += std::format("      {}: {}\n", printable(k), printable(v));
+        if (f.result == RuleResult::Fail || f.result == RuleResult::Unknown)
+            o += std::format("      fix: {}\n", f.remediation);
+    }
+    const AuditSummary s = summarize(r);
+    o += std::format("Summary: {} pass, {} fail, {} unknown, {} not applicable\n", s.pass, s.fail,
+                     s.unknown, s.not_applicable);
+    o += std::format("Overall: {} (an audit of OS settings, not a malware scan or a protection guarantee)\n",
+                     to_string(audit_overall(r)));
+    return o;
+}
+
 }  // namespace metasec

@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 
+#include "../core/audit.hpp"
 #include "../core/types.hpp"
 
 namespace metasec::win {
@@ -38,7 +39,13 @@ std::vector<CheckResult> wsc_checks(const std::string& now_utc);
 // "Defender off because another AV is healthy" from "Defender off, nothing protecting".
 std::vector<CheckResult> defender_checks(const std::string& now_utc, State wsc_state);
 
+// Registered antivirus products from Security Center (client SKUs only; Server => NOT_SUPPORTED).
+AvProductsObservation av_products_observation();
+
 // Runs all providers. Requires a live ComApartment on the calling thread.
 StatusReport collect_status(std::chrono::system_clock::time_point now);
+
+// status data plus the registered-AV list, for `audit`. Requires a live ComApartment.
+AuditInput collect_audit_input(std::chrono::system_clock::time_point now);
 
 }  // namespace metasec::win
