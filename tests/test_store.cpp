@@ -1,7 +1,5 @@
 // Tests for MVP-4 event store (SQLite): migrations, fail-closed refusals, idempotence, restart,
 // rotation by rows and by bytes, truncation, ordering. Every test uses its own temp directory.
-#include <atomic>
-#include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -11,9 +9,11 @@
 #include <sqlite3.h>
 
 #include "core/store.hpp"
+#include "temp_dir.hpp"
 
 using namespace metasec;
 namespace fs = std::filesystem;
+using test_support::TempDir;
 
 namespace {
 
@@ -28,30 +28,6 @@ void check(bool ok, const char* expr, const char* file, int line) {
     }
 }
 #define CHECK(e) check((e), #e, __FILE__, __LINE__)
-
-std::atomic<int> g_dir_counter{0};
-
-// Unique directory under the system temp dir, removed when the test ends.
-class TempDir {
-public:
-    TempDir() {
-        const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-        dir_ = fs::temp_directory_path() /
-               ("metasec-store-test-" + std::to_string(stamp) + "-" + std::to_string(g_dir_counter++));
-        fs::create_directories(dir_);
-    }
-    ~TempDir() {
-        std::error_code ec;
-        fs::remove_all(dir_, ec);
-    }
-    TempDir(const TempDir&) = delete;
-    TempDir& operator=(const TempDir&) = delete;
-    fs::path file(const char* name = "events.db") const { return dir_ / name; }
-    const fs::path& dir() const { return dir_; }
-
-private:
-    fs::path dir_;
-};
 
 StoreEvent ev(int i, std::size_t evidence_value_len = 8, int pairs = 1) {
     StoreEvent e;

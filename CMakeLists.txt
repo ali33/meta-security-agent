@@ -31,7 +31,7 @@ if(MSVC)
 endif()
 
 # Local event store (SQLite). Still free of Windows headers.
-add_library(metasec_store STATIC src/core/store.cpp)
+add_library(metasec_store STATIC src/core/store.cpp src/core/observer.cpp)
 target_link_libraries(metasec_store PUBLIC metasec_core PRIVATE sqlite3_vendor)
 
 # Windows providers (firewall, Security Center, Defender via WMI).
@@ -103,10 +103,20 @@ if(BUILD_TESTING)
   add_executable(metasec_store_tests tests/test_store.cpp)
   target_link_libraries(metasec_store_tests PRIVATE metasec_store sqlite3_vendor)
   target_compile_definitions(metasec_store_tests PRIVATE NOMINMAX)
+  target_include_directories(metasec_store_tests PRIVATE tests)
   if(MSVC)
     target_compile_options(metasec_store_tests PRIVATE /W4 /WX /EHsc /utf-8 /permissive-)
   endif()
   add_test(NAME store_unit COMMAND metasec_store_tests)
+
+  add_executable(metasec_observer_tests tests/test_observer.cpp)
+  target_link_libraries(metasec_observer_tests PRIVATE metasec_store)
+  target_compile_definitions(metasec_observer_tests PRIVATE NOMINMAX)
+  target_include_directories(metasec_observer_tests PRIVATE tests)
+  if(MSVC)
+    target_compile_options(metasec_observer_tests PRIVATE /W4 /WX /EHsc /utf-8 /permissive-)
+  endif()
+  add_test(NAME observer_unit COMMAND metasec_observer_tests)
 
   add_test(NAME json_roundtrip
     COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:metasec_tests>
