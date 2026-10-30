@@ -1,120 +1,73 @@
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
 #include <windows.h>
-#include <netfw.h>
-#include <wscapi.h>
-#include <iostream>
-#include <sstream>
-#include <string>
-#include <vector>
-#include <iomanip>
-#include <cstdio>
-#pragma comment(lib, "ole32.lib")
-#pragma comment(lib, "wscapi.lib")
 
-struct Check { std::string name, state, source, error; };
-static std::string json_escape(const std::string& s) {
-    std::string out;
-    for(unsigned char c : s) {
-        if(c=='"') out+="\\\"";
-        else if(c=='\\') out+="\\\\";
-        else if(c=='\n') out+="\\n";
-        else if(c=='\r') out+="\\r";
-        else if(c=='\t') out+="\\t";
-        else if(c<32) { char buf[7]; sprintf_s(buf,"\\u%04x",c); out+=buf; }
-        else out += static_cast<char>(c);
-    }
-    return out;
+#include <chrono>
+#include <cstdio>
+#include <iostream>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include "core/cli.hpp"
+#include "core/render.hpp"
+#include "win/collect.hpp"
+
+#ifndef META_SEC_VERSION
+#define META_SEC_VERSION "0.0.0"
+#endif
+
+namespace {
+
+// Writes all of `s` to stdout; false on failure (closed pipe, full disk...).
+bool write_stdout(const std::string& s) {
+    return std::fwrite(s.data(), 1, s.size(), stdout) == s.size() && std::fflush(stdout) == 0;
 }
-static std::string utf8(const std::wstring& w) {
-    if(w.empty()) return {};
-    int n=WideCharToMultiByte(CP_UTF8,0,w.c_str(),static_cast<int>(w.size()),nullptr,0,nullptr,nullptr);
-    if(n<=0) return {};
-    std::string s(static_cast<size_t>(n),'\0');
-    WideCharToMultiByte(CP_UTF8,0,w.c_str(),static_cast<int>(w.size()),s.data(),n,nullptr,nullptr);
+
+std::string wide_to_utf8(const wchar_t* w) {
+    const int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
+    if (n <= 1) return {};
+    std::string s(static_cast<std::size_t>(n - 1), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w, -1, s.data(), n, nullptr, nullptr);
     return s;
 }
-static std::string hex_error(HRESULT hr) {
-    std::ostringstream s; s<<"HRESULT 0x"<<std::hex<<std::uppercase<<static_cast<unsigned long>(hr);return s.str();
-}
-static std::string hostname() {
-    wchar_t buf[256]{}; DWORD length=256;
-    return GetComputerNameW(buf,&length) ? utf8(std::wstring(buf,length)) : "UNKNOWN";
-}
-static std::string windows_version() {
-    return "Windows (build not queried in MVP-0)";
-}
-static std::vector<Check> firewall() {
-    std::vector<Check> res;
-    INetFwPolicy2* policy=nullptr;
-    HRESULT hr=CoCreateInstance(__uuidof(NetFwPolicy2),nullptr,CLSCTX_INPROC_SERVER,__uuidof(INetFwPolicy2),reinterpret_cast<void**>(&policy));
-    if(FAILED(hr)||!policy) {
-        for(const char* label:{"firewall.domain","firewall.private","firewall.public"})
-            res.push_back({label,"UNKNOWN","INetFwPolicy2",hex_error(hr)});
-        return res;
+
+}  // namespace
+
+int wmain(int argc, wchar_t** argv) {
+    using namespace metasec;
+    SetConsoleOutputCP(CP_UTF8);
+    const std::string version = META_SEC_VERSION;
+
+    std::vector<std::string> storage;
+    for (int i = 1; i < argc; ++i) storage.push_back(wide_to_utf8(argv[i]));
+    std::vector<std::string_view> args(storage.begin(), storage.end());
+
+    const ParsedArgs parsed = parse_args(args);
+    switch (parsed.command) {
+        case Command::Invalid:
+            std::cerr << "meta-sec: " << parsed.error << "\n" << usage_text(version);
+            return kExitError;
+        case Command::Help:
+            return write_stdout(usage_text(version)) ? kExitOk : kExitError;
+        case Command::Version:
+            return write_stdout(version + "\n") ? kExitOk : kExitError;
+        case Command::Status:
+            break;
     }
-    const struct {const char* name; NET_FW_PROFILE_TYPE2 type;} profiles[]={
-        {"firewall.domain",NET_FW_PROFILE2_DOMAIN},
-        {"firewall.private",NET_FW_PROFILE2_PRIVATE},
-        {"firewall.public",NET_FW_PROFILE2_PUBLIC}};
-    for(const auto& p:profiles) {
-        VARIANT_BOOL enabled=VARIANT_FALSE;
-        const HRESULT result=policy->get_FirewallEnabled(p.type,&enabled);
-        if(SUCCEEDED(result)) res.push_back({p.name,enabled==VARIANT_TRUE?"ENABLED":"DISABLED","INetFwPolicy2",""});
-        else res.push_back({p.name,"UNKNOWN","INetFwPolicy2",hex_error(result)});
+
+    // One COM apartment on this thread; every provider runs here and releases its
+    // interfaces before the apartment is torn down (end of this scope).
+    win::ComApartment com;
+    if (!com.ok()) {
+        std::cerr << "meta-sec: COM initialisation failed: "
+                  << hresult_code(static_cast<std::uint32_t>(com.result())) << "\n";
+        return kExitError;
     }
-    policy->Release();
-    return res;
-}
-static Check antivirus() {
-    WSC_SECURITY_PROVIDER_HEALTH health=WSC_SECURITY_PROVIDER_HEALTH_NOTMONITORED;
-    HRESULT hr=WscGetSecurityProviderHealth(WSC_SECURITY_PROVIDER_ANTIVIRUS,&health);
-    if(FAILED(hr)) return {"antivirus.windows_security_center","NOT_SUPPORTED","WscGetSecurityProviderHealth",hex_error(hr)};
-    const char* state="UNKNOWN";
-    switch(health) {
-        case WSC_SECURITY_PROVIDER_HEALTH_GOOD: state="GOOD";break;
-        case WSC_SECURITY_PROVIDER_HEALTH_POOR: state="POOR";break;
-        case WSC_SECURITY_PROVIDER_HEALTH_SNOOZE: state="SNOOZE";break;
-        case WSC_SECURITY_PROVIDER_HEALTH_NOTMONITORED: state="NOT_MONITORED";break;
-        default:break;
+    const StatusReport report = win::collect_status(std::chrono::system_clock::now());
+    const std::string out =
+        parsed.json ? render_status_json(report, version) : render_status_text(report, version);
+    if (!write_stdout(out)) {
+        std::cerr << "meta-sec: failed to write output\n";
+        return kExitError;
     }
-    return {"antivirus.windows_security_center",state,"WscGetSecurityProviderHealth",""};
-}
-int main(int argc,char** argv) {
-    if(argc==1 || (std::string(argv[1])!="status" && std::string(argv[1])!="--help" && std::string(argv[1])!="-h")) {
-        std::cerr<<"Usage: meta-sec status [--json] | --help\n";
-        return 2;
-    }
-    if(std::string(argv[1])=="--help" || std::string(argv[1])=="-h") {
-        std::cout<<"META Security Agent v0.1.0 (Standalone, read-only)\n"
-                 <<"Usage: meta-sec status [--json]\n";
-        return 0;
-    }
-    const bool json=argc==3 && std::string(argv[2])=="--json";
-    if(argc>3 || (argc==3 && !json)) {std::cerr<<"Invalid argument. Try --help.\n";return 2;}
-    const HRESULT init=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
-    if(FAILED(init)) {std::cerr<<"COM init failed: "<<hex_error(init)<<"\n";return 2;}
-    std::vector<Check> checks=firewall();
-    checks.push_back(antivirus());
-    bool incomplete=false;
-    for(const auto& c:checks) if(c.state=="UNKNOWN" || c.state=="NOT_SUPPORTED" || c.state=="NOT_MONITORED") incomplete=true;
-    if(json) {
-        std::cout<<"{\"schema_version\":1,\"product\":\"META Security Agent\",\"mode\":\"standalone\",\"hostname\":\""<<json_escape(hostname())<<"\",\"platform\":\""<<json_escape(windows_version())<<"\",\"checks\":[";
-        for(size_t i=0;i<checks.size();++i) {
-            const auto& c=checks[i];if(i) std::cout<<",";
-            std::cout<<"{\"name\":\""<<json_escape(c.name)<<"\",\"state\":\""<<json_escape(c.state)<<"\",\"source\":\""<<json_escape(c.source)<<"\",\"error\":\""<<json_escape(c.error)<<"\"}";
-        }
-        std::cout<<"],\"overall\":\""<<(incomplete?"INCOMPLETE":"OBSERVED")<<"\"}\n";
-    } else {
-        std::cout<<"META Security Agent v0.1.0 | Standalone | Read-only\n"
-                 <<"Host: "<<hostname()<<"\nPlatform: "<<windows_version()<<"\n";
-        for(const auto& c:checks) {
-            std::cout<<std::left<<std::setw(42)<<c.name<<c.state;
-            if(!c.error.empty())std::cout<<" ("<<c.error<<")";
-            std::cout<<"\n";
-        }
-        std::cout<<"Overall: "<<(incomplete?"INCOMPLETE":"OBSERVED")<<" (not an AV protection verdict)\n";
-    }
-    CoUninitialize();
-    return incomplete?3:0;
+    return exit_code_for(compute_overall(report.checks));
 }
