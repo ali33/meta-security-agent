@@ -13,6 +13,7 @@
 
 #include "core/cli.hpp"
 #include "core/render.hpp"
+#include "core/scan.hpp"
 #include "core/watch.hpp"
 #include "win/collect.hpp"
 
@@ -181,6 +182,44 @@ int run_watch_command(const metasec::ParsedArgs& parsed, const std::string& vers
     return res.last_overall ? exit_code_for(*res.last_overall) : kExitOk;
 }
 
+int run_scan_command(const metasec::ParsedArgs& parsed, const std::string& version) {
+    using namespace metasec;
+    win::ComApartment com;
+    if (!init_com(com)) return kExitError;
+
+    ScanHooks hooks;
+    hooks.observe_defender = [] { return win::defender_scan_observation(); };
+    hooks.observe_av = [] { return win::av_products_observation(); };
+    hooks.ask_approval = [](const std::string& prompt) { return win::console_approval(prompt); };
+    hooks.actor = [] { return win::current_actor(); };
+    hooks.elevated = [] { return win::process_elevated(); };
+    hooks.now_utc = [] { return format_utc(std::chrono::system_clock::now()); };
+    hooks.start_quick_scan = [](int timeout_seconds) {
+        // Ctrl+C only stops our waiting: the scan, once started, is not cancelled by this tool.
+        // The handler exists only around the Start call; during the approval prompt Ctrl+C
+        // keeps its default (terminate), so an interrupted prompt can never start anything.
+        WatchSignals signals;
+        if (!signals.ok()) {
+            StartResult r;
+            r.exec_hr = static_cast<std::int32_t>(0x80004005u);  // E_FAIL: refuse to start without a stop handler
+            return r;
+        }
+        return win::start_defender_quick_scan(timeout_seconds,
+                                              [] { return WaitForSingleObject(g_stop_event, 0) == WAIT_OBJECT_0; });
+    };
+
+    ScanOptions opt;
+    opt.json = parsed.json;
+    opt.dry_run = parsed.dry_run;
+    const ScanReport report = run_scan(opt, hooks);
+    const std::string out = parsed.json ? render_scan_json(report, version) : render_scan_text(report, version);
+    if (!write_stdout(out)) {
+        std::cerr << "meta-sec: failed to write output\n";
+        return kExitError;
+    }
+    return scan_exit_code(report.status);
+}
+
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
@@ -210,6 +249,8 @@ int wmain(int argc, wchar_t** argv) {
                 return run_audit_command(parsed.json, version);
             case Command::Watch:
                 return run_watch_command(parsed, version);
+            case Command::Scan:
+                return run_scan_command(parsed, version);
         }
         return kExitError;
     } catch (const std::exception& e) {
