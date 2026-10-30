@@ -47,6 +47,8 @@ struct ObserverOptions {
     int confirm_polls = kDefaultConfirmPolls;
     int max_polls = 0;  // snapshot attempts before stopping; 0 = until stop is requested
     std::string version;
+    // Shown (short, no secrets) as last_error when `store` is null, instead of the generic text.
+    std::string store_unavailable_reason;
 };
 
 struct ObserverHooks {

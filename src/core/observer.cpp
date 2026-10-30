@@ -166,7 +166,8 @@ ObserverResult Observer::run() {
                     }
                 } else {
                     pending.clear();
-                    note_store_error("event store unavailable");
+                    note_store_error(opt_.store_unavailable_reason.empty() ? "event store unavailable"
+                                                                          : "event store unavailable: " + opt_.store_unavailable_reason);
                 }
 
                 long long total = 0;

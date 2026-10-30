@@ -35,7 +35,8 @@ add_library(metasec_store STATIC
   src/core/store.cpp
   src/core/observer.cpp
   src/core/ipc_proto.cpp
-  src/core/service_model.cpp)
+  src/core/service_model.cpp
+  src/core/service_install.cpp)
 target_link_libraries(metasec_store PUBLIC metasec_core PRIVATE sqlite3_vendor)
 
 # Windows providers (firewall, Security Center, Defender via WMI).
@@ -129,6 +130,14 @@ if(BUILD_TESTING)
     target_compile_options(metasec_service_tests PRIVATE /W4 /WX /EHsc /utf-8 /permissive-)
   endif()
   add_test(NAME service_unit COMMAND metasec_service_tests)
+
+  add_executable(metasec_service_install_tests tests/test_service_install.cpp)
+  target_link_libraries(metasec_service_install_tests PRIVATE metasec_store)
+  target_compile_definitions(metasec_service_install_tests PRIVATE NOMINMAX)
+  if(MSVC)
+    target_compile_options(metasec_service_install_tests PRIVATE /W4 /WX /EHsc /utf-8 /permissive-)
+  endif()
+  add_test(NAME service_install_unit COMMAND metasec_service_install_tests)
 
   add_test(NAME json_roundtrip
     COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:metasec_tests>

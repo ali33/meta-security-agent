@@ -173,7 +173,8 @@ ParsedArgs parse_service(const std::vector<std::string_view>& args) {
 
     for (std::size_t i = 2; i < args.size(); ++i) {
         const std::string_view a = args[i];
-        if (a == "--json" && !p.json && (sc == ServiceCommand::Status || sc == ServiceCommand::Events)) {
+        if (a == "--json" && !p.json && (sc == ServiceCommand::Status || sc == ServiceCommand::Events ||
+                                  sc == ServiceCommand::Install || sc == ServiceCommand::Uninstall)) {
             p.json = true;
         } else if (a == "--limit" && sc == ServiceCommand::Events) {
             if (!int_flag(i, seen_limit, kMinEventsLimit, kMaxEventsLimit, p.limit)) return p;
@@ -273,7 +274,7 @@ std::string usage_text(const std::string& version) {
            "                             Show whether the optional background service is installed/running\n"
            "  meta-sec service events [--json] [--limit N]\n"
            "                             Show recent events the service recorded (N: 1-200, default 50)\n"
-           "  meta-sec service install|uninstall [--dry-run]\n"
+           "  meta-sec service install|uninstall [--dry-run] [--json]\n"
            "                             Install/remove the background service after typed local approval (Administrator)\n"
            "  meta-sec service run --console [--data-dir PATH] [--pipe-name NAME] [--interval S] [--confirm N] [--max-polls N]\n"
            "                             Run the observer in this console (development; Ctrl+C stops)\n"

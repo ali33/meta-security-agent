@@ -149,8 +149,8 @@ The only side effect in the product. It is limited to a single **quick** scan th
 ```powershell
 meta-sec.exe service status [--json]
 meta-sec.exe service events [--json] [--limit N]          # N: 1..200, default 50
-meta-sec.exe service install [--dry-run]                   # typed approval + Administrator
-meta-sec.exe service uninstall [--dry-run]                 # typed approval + Administrator
+meta-sec.exe service install [--dry-run] [--json]        # typed approval + Administrator
+meta-sec.exe service uninstall [--dry-run] [--json]        # typed approval + Administrator
 meta-sec.exe service run --console [--data-dir PATH] [--pipe-name NAME] [--interval S] [--confirm N] [--max-polls N]
 meta-sec.exe service run --scm                             # internal: the entry the Service Control Manager starts; not for humans
 ```

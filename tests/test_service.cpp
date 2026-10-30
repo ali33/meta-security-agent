@@ -700,7 +700,7 @@ void test_cli_service_reject() {
         {"service", "events", "--limit", "5", "--limit", "6"},
         {"service", "events", "--json", "--json"},
         {"service", "events", "--dry-run"},
-        {"service", "install", "--json"},
+        {"service", "install", "--json", "--json"},
         {"service", "install", "--dry-run", "--dry-run"},
         {"service", "install", "--yes"},
         {"service", "install", "--force"},
