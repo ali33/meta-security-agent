@@ -11,6 +11,7 @@ endif()
 add_library(metasec_core STATIC
   src/core/json.cpp
   src/core/types.cpp
+  src/core/interpret.cpp
   src/core/render.cpp
   src/core/cli.cpp)
 target_include_directories(metasec_core PUBLIC src)
@@ -31,9 +32,13 @@ target_compile_definitions(meta-sec PRIVATE META_SEC_VERSION="${PROJECT_VERSION}
 foreach(t metasec_core metasec_win meta-sec)
   target_compile_definitions(${t} PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
   if(MSVC)
-    target_compile_options(${t} PRIVATE /W4 /WX /EHsc /utf-8 /permissive-)
+    target_compile_options(${t} PRIVATE /W4 /WX /EHsc /utf-8 /permissive- /sdl /guard:cf)
   endif()
 endforeach()
+if(MSVC)
+  # Hardening: control-flow guard, CET shadow stack, and no DLL search-path planting (Wscapi).
+  target_link_options(meta-sec PRIVATE /guard:cf /CETCOMPAT /DEPENDENTLOADFLAG:0x800)
+endif()
 
 include(CTest)
 if(BUILD_TESTING)
@@ -44,6 +49,10 @@ if(BUILD_TESTING)
     target_compile_options(metasec_tests PRIVATE /W4 /WX /EHsc /utf-8 /permissive-)
   endif()
   add_test(NAME core_unit COMMAND metasec_tests)
+
+  add_test(NAME json_roundtrip
+    COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:metasec_tests>
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/json_roundtrip.cmake)
 
   # End-to-end tests drive the real executable; JSON validity is checked by CMake's own parser.
   foreach(mode help version status_text status_json bad_command bad_flag no_args)

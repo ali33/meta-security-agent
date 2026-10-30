@@ -14,6 +14,7 @@ enum class State {
     Poor,
     Snooze,
     NotMonitored,
+    Passive,       // observed, but another AV is primary (Defender passive / not running)
     Unknown,       // the call failed or returned something we cannot interpret
     NotSupported,  // the API / provider does not exist on this machine
 };
@@ -22,6 +23,11 @@ const char* to_string(State s);
 
 // States that mean "we did not actually observe the setting".
 bool is_incomplete(State s);
+
+// Per-check reading of a state. Observation != approval: DISABLED is ATTENTION, not fine.
+enum class Posture { Ok, Attention, Unknown, NotApplicable };
+const char* to_string(Posture p);
+Posture posture_of(State s);
 
 struct CheckResult {
     std::string check_id;
@@ -45,10 +51,16 @@ struct StatusReport {
     std::vector<CheckResult> checks;
 };
 
-enum class Overall { Observed, Incomplete };
+// Incomplete: some check could not be observed (exit 3).
+// ObservedWithIssues: everything observed, but at least one check is ATTENTION (exit 0:
+//   `status` observes, only `audit` (MVP-1) returns exit 1).
+enum class Overall { Observed, ObservedWithIssues, Incomplete };
 const char* to_string(Overall o);
 
-// OBSERVED only if there is at least one check and every check yielded a real observation.
+// Ids of checks whose posture is ATTENTION.
+std::vector<std::string> attention_ids(const std::vector<CheckResult>& checks);
+
+// Observed* only if there is at least one check and every check yielded a real observation.
 // This is a statement about the observation, never a protection verdict.
 Overall compute_overall(const std::vector<CheckResult>& checks);
 
@@ -69,6 +81,11 @@ State classify_failure(std::uint32_t hr);
 
 // WSC_SECURITY_PROVIDER_HEALTH numeric value -> State (0=GOOD 1=NOTMONITORED 2=POOR 3=SNOOZE).
 State wsc_health_to_state(int health);
+
+// Failure with an explicit non-HRESULT code (e.g. "TIMEOUT"). `state` must be Unknown or
+// NotSupported; anything else is coerced to Unknown.
+CheckResult make_failure_code(std::string check_id, std::string observed_at_utc, std::string source,
+                              State state, std::string error_code);
 
 // Builds a result for a failed call. State is never positive.
 CheckResult make_failure(std::string check_id, std::string observed_at_utc, std::string source,

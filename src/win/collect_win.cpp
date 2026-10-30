@@ -11,8 +11,12 @@ StatusReport collect_status(std::chrono::system_clock::time_point now) {
     r.hostname = host_name();
     r.platform = platform_info();
     for (auto&& c : firewall_checks(now_utc)) r.checks.push_back(std::move(c));
-    for (auto&& c : wsc_checks(now_utc)) r.checks.push_back(std::move(c));
-    for (auto&& c : defender_checks(now_utc)) r.checks.push_back(std::move(c));
+    State wsc_state = State::Unknown;
+    for (auto&& c : wsc_checks(now_utc)) {
+        wsc_state = c.state;
+        r.checks.push_back(std::move(c));
+    }
+    for (auto&& c : defender_checks(now_utc, wsc_state)) r.checks.push_back(std::move(c));
     return r;
 }
 

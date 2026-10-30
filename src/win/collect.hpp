@@ -18,10 +18,13 @@ public:
     ComApartment& operator=(const ComApartment&) = delete;
     // HRESULT of CoInitializeEx (S_OK / S_FALSE mean usable).
     long result() const { return hr_; }
+    // HRESULT of CoInitializeSecurity (RPC_E_TOO_LATE is normal and reported as S_OK).
+    long security_result() const { return sec_hr_; }
     bool ok() const { return hr_ >= 0; }
 
 private:
     long hr_;
+    long sec_hr_ = 0;
     bool owns_;
 };
 
@@ -31,7 +34,9 @@ PlatformInfo platform_info();
 // Each provider returns one or more checks; failures never yield a positive state.
 std::vector<CheckResult> firewall_checks(const std::string& now_utc);
 std::vector<CheckResult> wsc_checks(const std::string& now_utc);
-std::vector<CheckResult> defender_checks(const std::string& now_utc);
+// `wsc_state` is the already-observed Security Center state, used only to tell
+// "Defender off because another AV is healthy" from "Defender off, nothing protecting".
+std::vector<CheckResult> defender_checks(const std::string& now_utc, State wsc_state);
 
 // Runs all providers. Requires a live ComApartment on the calling thread.
 StatusReport collect_status(std::chrono::system_clock::time_point now);

@@ -27,8 +27,9 @@ ComApartment::ComApartment() : hr_(CoInitializeEx(nullptr, COINIT_APARTMENTTHREA
     owns_ = hr_ >= 0;
     if (owns_) {
         // Needed by WMI. RPC_E_TOO_LATE just means security was already set: not an error here.
-        CoInitializeSecurity(nullptr, -1, nullptr, nullptr, RPC_C_AUTHN_LEVEL_DEFAULT,
-                             RPC_C_IMP_LEVEL_IMPERSONATE, nullptr, EOAC_NONE, nullptr);
+        sec_hr_ = CoInitializeSecurity(nullptr, -1, nullptr, nullptr, RPC_C_AUTHN_LEVEL_DEFAULT,
+                                       RPC_C_IMP_LEVEL_IMPERSONATE, nullptr, EOAC_NONE, nullptr);
+        if (sec_hr_ == RPC_E_TOO_LATE) sec_hr_ = S_OK;
     }
 }
 

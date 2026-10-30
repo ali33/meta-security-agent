@@ -1,5 +1,6 @@
 // Defender-specific state via the supported WMI provider
 // ROOT\Microsoft\Windows\Defender : MSFT_MpComputerStatus (read-only query, COM, no PowerShell).
+// This file only fetches raw values; interpretation lives in core/interpret.cpp.
 #include <windows.h>
 #include <objbase.h>
 
@@ -10,6 +11,7 @@
 #include <optional>
 #include <string>
 
+#include "../core/interpret.hpp"
 #include "collect.hpp"
 
 namespace metasec::win {
@@ -17,10 +19,6 @@ namespace metasec::win {
 using Microsoft::WRL::ComPtr;
 
 namespace {
-
-const char* const kSource = "WMI:ROOT\\Microsoft\\Windows\\Defender:MSFT_MpComputerStatus";
-const char* const kIdAv = "antivirus.defender.antivirus";
-const char* const kIdRt = "antivirus.defender.realtime_protection";
 
 struct Variant {
     VARIANT v;
@@ -65,71 +63,53 @@ std::optional<std::string> get_string(IWbemClassObject* o, const wchar_t* name) 
     return narrow(var.v.bstrVal);
 }
 
-std::vector<CheckResult> fail_both(const std::string& now_utc, std::uint32_t hr) {
-    return {make_failure(kIdAv, now_utc, kSource, hr), make_failure(kIdRt, now_utc, kSource, hr)};
-}
-
-CheckResult bool_check(const char* id, const std::string& now_utc,
-                       std::optional<bool> value, const wchar_t* prop_for_error) {
-    CheckResult c;
-    c.check_id = id;
-    c.observed_at_utc = now_utc;
-    c.source = kSource;
-    if (!value) {
-        c.state = State::Unknown;
-        c.error_code = "PROPERTY_UNAVAILABLE:" + narrow(prop_for_error);
-        return c;
-    }
-    c.state = *value ? State::Enabled : State::Disabled;
-    return c;
+std::vector<CheckResult> fail_hr(const std::string& now_utc, HRESULT hr) {
+    const auto code = static_cast<std::uint32_t>(hr);
+    return defender_failure(now_utc, classify_failure(code), hresult_code(code));
 }
 
 }  // namespace
 
-std::vector<CheckResult> defender_checks(const std::string& now_utc) {
+std::vector<CheckResult> defender_checks(const std::string& now_utc, State wsc_state) {
     ComPtr<IWbemLocator> locator;
     HRESULT hr = CoCreateInstance(CLSID_WbemLocator, nullptr, CLSCTX_INPROC_SERVER,
                                   IID_PPV_ARGS(&locator));
-    if (FAILED(hr)) return fail_both(now_utc, static_cast<std::uint32_t>(hr));
+    if (FAILED(hr)) return fail_hr(now_utc, hr);
 
     ComPtr<IWbemServices> services;
     _bstr_t ns(L"ROOT\\Microsoft\\Windows\\Defender");
-    hr = locator->ConnectServer(ns, nullptr, nullptr, nullptr, 0, nullptr, nullptr, &services);
-    if (FAILED(hr)) return fail_both(now_utc, static_cast<std::uint32_t>(hr));
+    // USE_MAX_WAIT bounds the connect to at most two minutes instead of blocking indefinitely.
+    hr = locator->ConnectServer(ns, nullptr, nullptr, nullptr, WBEM_FLAG_CONNECT_USE_MAX_WAIT,
+                                nullptr, nullptr, &services);
+    if (FAILED(hr)) return fail_hr(now_utc, hr);
 
     hr = CoSetProxyBlanket(services.Get(), RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE, nullptr,
                            RPC_C_AUTHN_LEVEL_CALL, RPC_C_IMP_LEVEL_IMPERSONATE, nullptr, EOAC_NONE);
-    if (FAILED(hr)) return fail_both(now_utc, static_cast<std::uint32_t>(hr));
+    if (FAILED(hr)) return fail_hr(now_utc, hr);
 
     ComPtr<IEnumWbemClassObject> en;
     hr = services->ExecQuery(_bstr_t(L"WQL"), _bstr_t(L"SELECT * FROM MSFT_MpComputerStatus"),
                              WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY, nullptr, &en);
-    if (FAILED(hr)) return fail_both(now_utc, static_cast<std::uint32_t>(hr));
+    if (FAILED(hr)) return fail_hr(now_utc, hr);
 
     ComPtr<IWbemClassObject> obj;
     ULONG returned = 0;
     hr = en->Next(10000 /* ms */, 1, &obj, &returned);
-    if (FAILED(hr)) return fail_both(now_utc, static_cast<std::uint32_t>(hr));
-    if (returned == 0 || !obj) {
-        // Namespace exists but the provider returned no instance: nothing was observed.
-        auto r = fail_both(now_utc, 0x80004005u);
-        for (auto& c : r) c.error_code = "NO_INSTANCE";
-        return r;
-    }
+    if (FAILED(hr)) return fail_hr(now_utc, hr);
+    if (hr == WBEM_S_TIMEDOUT) return defender_failure(now_utc, State::Unknown, "TIMEOUT");
+    if (returned == 0 || !obj) return defender_failure(now_utc, State::Unknown, "NO_INSTANCE");
 
-    CheckResult av = bool_check(kIdAv, now_utc, get_bool(obj.Get(), L"AntivirusEnabled"), L"AntivirusEnabled");
-    CheckResult rt = bool_check(kIdRt, now_utc, get_bool(obj.Get(), L"RealTimeProtectionEnabled"),
-                                L"RealTimeProtectionEnabled");
-
-    // Context for interpreting the two checks. Passive/SxS mode means another AV is primary.
-    if (auto s = get_bool(obj.Get(), L"AMServiceEnabled")) av.evidence.emplace_back("am_service_enabled", *s ? "true" : "false");
-    if (auto s = get_string(obj.Get(), L"AMRunningMode")) av.evidence.emplace_back("am_running_mode", *s);
-    if (auto n = get_int(obj.Get(), L"AntivirusSignatureAge"); n && *n != 65535) av.evidence.emplace_back("signature_age_days", std::to_string(*n));
-    if (auto s = get_string(obj.Get(), L"AntivirusSignatureVersion")) av.evidence.emplace_back("signature_version", *s);
-    if (auto s = get_string(obj.Get(), L"AMProductVersion")) av.evidence.emplace_back("am_product_version", *s);
-    if (auto s = get_bool(obj.Get(), L"IsTamperProtected")) rt.evidence.emplace_back("tamper_protected", *s ? "true" : "false");
-
-    return {std::move(av), std::move(rt)};
+    IWbemClassObject* o = obj.Get();
+    DefenderRaw raw;
+    raw.antivirus_enabled = get_bool(o, L"AntivirusEnabled");
+    raw.realtime_enabled = get_bool(o, L"RealTimeProtectionEnabled");
+    raw.service_enabled = get_bool(o, L"AMServiceEnabled");
+    raw.tamper_protected = get_bool(o, L"IsTamperProtected");
+    raw.running_mode = get_string(o, L"AMRunningMode");
+    raw.signature_age_days = get_int(o, L"AntivirusSignatureAge");
+    raw.signature_version = get_string(o, L"AntivirusSignatureVersion");
+    raw.product_version = get_string(o, L"AMProductVersion");
+    return interpret_defender(raw, wsc_state, now_utc);
 }
 
 }  // namespace metasec::win

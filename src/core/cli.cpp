@@ -56,11 +56,31 @@ std::string usage_text(const std::string& version) {
 std::string sanitize_for_display(std::string_view s) {
     constexpr std::size_t kMax = 64;
     std::string out;
-    for (std::size_t i = 0; i < s.size() && i < kMax; ++i) {
+    std::size_t i = 0;
+    for (; i < s.size() && out.size() < kMax; ++i) {
         const unsigned char c = static_cast<unsigned char>(s[i]);
-        out += (c < 0x20 || c == 0x7F) ? '?' : static_cast<char>(c);
+        if (c < 0x20 || c == 0x7F) {
+            out += '?';
+        } else if (c == 0xC2 && i + 1 < s.size() && static_cast<unsigned char>(s[i + 1]) >= 0x80 &&
+                   static_cast<unsigned char>(s[i + 1]) <= 0x9F) {
+            out += '?';  // C1 control character (U+0080..U+009F)
+            ++i;
+        } else if (c >= 0x80) {
+            // Copy a whole UTF-8 sequence or nothing, so truncation never splits a character.
+            const std::size_t n = c >= 0xF0 ? 4 : c >= 0xE0 ? 3 : c >= 0xC0 ? 2 : 1;
+            if (n == 1) {
+                out += '?';  // stray continuation byte
+            } else if (i + n <= s.size() && out.size() + n <= kMax) {
+                out.append(s.substr(i, n));
+                i += n - 1;
+            } else {
+                break;
+            }
+        } else {
+            out += static_cast<char>(c);
+        }
     }
-    if (s.size() > kMax) out += "...";
+    if (i < s.size()) out += "...";
     return out;
 }
 

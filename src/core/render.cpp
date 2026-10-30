@@ -49,6 +49,7 @@ std::string render_status_json(const StatusReport& r, const std::string& version
         put_kv(o, "name", c.check_id); o += ',';  // alias kept from the MVP-0 skeleton contract
         put_kv(o, "observed_at_utc", c.observed_at_utc); o += ',';
         put_kv(o, "state", to_string(c.state)); o += ',';
+        put_kv(o, "posture", to_string(posture_of(c.state))); o += ',';
         put_kv(o, "source", c.source); o += ',';
         put_kv(o, "error_code", c.error_code); o += ',';
         put_kv(o, "error", c.error_code); o += ',';  // alias kept from the skeleton contract
@@ -60,6 +61,13 @@ std::string render_status_json(const StatusReport& r, const std::string& version
             put_kv(o, k, v);
         }
         o += "}}";
+    }
+    o += "],\"attention\":[";
+    bool fa = true;
+    for (const auto& id : attention_ids(r.checks)) {
+        if (!fa) o += ',';
+        fa = false;
+        put_str(o, id);
     }
     o += "],";
     put_kv(o, "overall", to_string(compute_overall(r.checks)));
@@ -74,9 +82,11 @@ std::string render_status_text(const StatusReport& r, const std::string& version
     o += std::format("Platform: {} {} ({})\n", r.platform.os, r.platform.version, r.platform.kind);
     o += std::format("Observed: {}\n", r.observed_at_utc);
     for (const auto& c : r.checks) {
-        std::string line = std::format("{:<44}{}", c.check_id, to_string(c.state));
+        std::string line = std::format("{:<44}{:<14}", c.check_id, to_string(c.state));
+        if (posture_of(c.state) == Posture::Attention) line += " <-- ATTENTION";
         if (!c.error_code.empty()) line += " (" + c.error_code + ")";
         for (const auto& [k, v] : c.evidence) line += std::format(" [{}={}]", k, v);
+        while (!line.empty() && line.back() == ' ') line.pop_back();
         o += line + '\n';
     }
     o += std::format("Overall: {} (an observation summary, not an antivirus protection verdict)\n",
