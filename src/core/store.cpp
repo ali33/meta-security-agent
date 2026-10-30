@@ -98,6 +98,8 @@ std::string evidence_to_json(const EvidencePairs& ev) {
     return o + "}";
 }
 
+std::string dedupe_part(const std::string& f) { return std::to_string(f.size()) + ':' + f + ';'; }
+
 // Truncates every field and derives the dedupe key. The store only ever sees the result.
 StoreEvent normalize(const StoreEvent& e) {
     StoreEvent n;
@@ -118,8 +120,9 @@ StoreEvent normalize(const StoreEvent& e) {
         if (!dup) n.evidence.emplace_back(std::move(key), truncate_utf8(v, kStoreMaxEvidenceValue));
     }
     if (e.dedupe_key.empty()) {
-        n.dedupe_key = n.kind + '|' + n.check_id + '|' + n.from_state + '|' + n.to_state + '|' +
-                       (n.first_observed_at_utc.empty() ? n.observed_at_utc : n.first_observed_at_utc);
+        // Length-prefixed fields: no value can imitate a separator, so two different events never share a key.
+        n.dedupe_key = dedupe_part(n.kind) + dedupe_part(n.check_id) + dedupe_part(n.from_state) + dedupe_part(n.to_state) +
+                       dedupe_part(n.first_observed_at_utc.empty() ? n.observed_at_utc : n.first_observed_at_utc);
     } else {
         n.dedupe_key = e.dedupe_key;
     }
@@ -252,7 +255,7 @@ struct EventStore::Impl {
         stage = "insert event";
         for (const auto& e : norm) {
             Stmt s(db,
-                   "INSERT OR IGNORE INTO events(kind, observed_at_utc, first_observed_at_utc, check_id, from_state,"
+                   "INSERT INTO events(kind, observed_at_utc, first_observed_at_utc, check_id, from_state,"
                    " to_state, confirmations, source, error_code, evidence_json, dedupe_key)"
                    " VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)");
             int rc = s.prepare_rc();
@@ -268,12 +271,18 @@ struct EventStore::Impl {
             b(s.text(9, e.error_code));
             b(s.text(10, evidence_to_json(e.evidence)));
             b(s.text(11, e.dedupe_key));
+            bool duplicate = false;
             if (rc == SQLITE_OK) {
                 rc = s.step();
                 if (rc == SQLITE_DONE) rc = SQLITE_OK;
+                // Only a UNIQUE conflict (same dedupe_key) is idempotence; any other constraint or I/O error is a failure.
+                else if (rc == SQLITE_CONSTRAINT && sqlite3_extended_errcode(db) == SQLITE_CONSTRAINT_UNIQUE) {
+                    duplicate = true;
+                    rc = SQLITE_OK;
+                }
             }
             if (rc != SQLITE_OK) return rc;
-            if (sqlite3_changes(db) > 0) {
+            if (!duplicate && sqlite3_changes(db) > 0) {
                 ++out.stored;
                 out.ids.push_back(sqlite3_last_insert_rowid(db));
             } else {
@@ -474,7 +483,7 @@ AppendResult EventStore::record_lifecycle(const std::string& kind, const std::st
     e.first_observed_at_utc = utc;
     e.source = "service";
     e.confirmations = 1;
-    e.dedupe_key = kind + '|' + truncate_utf8(utc, kStoreMaxTimestamp);
+    e.dedupe_key = dedupe_part(kind) + dedupe_part(truncate_utf8(utc, kStoreMaxTimestamp));
     try {
         std::lock_guard lock(impl_->mu);
         const std::string started = truncate_utf8(utc, kStoreMaxTimestamp);

@@ -164,6 +164,15 @@ void test_idempotent_append() {
     e4.dedupe_key = "custom";
     CHECK(s.append_event(e3).status == AppendStatus::Stored);
     CHECK(s.append_event(e4).status == AppendStatus::Duplicate);
+    // Separator characters inside fields cannot make two different events share a derived key.
+    StoreEvent p1 = ev(20), p2 = ev(20);
+    p1.check_id = "a|b";
+    p1.from_state = "c";
+    p2.check_id = "a";
+    p2.from_state = "b|c";
+    CHECK(s.append_event(p1).status == AppendStatus::Stored);
+    CHECK(s.append_event(p2).status == AppendStatus::Stored);
+    CHECK(s.count_events().value == 5);
 }
 
 void test_restart_keeps_cursor_and_no_duplicates() {
