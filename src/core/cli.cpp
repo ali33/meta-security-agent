@@ -86,6 +86,136 @@ ParsedArgs parse_scan(const std::vector<std::string_view>& args) {
     return p;
 }
 
+bool valid_pipe_name(std::string_view s) {
+    if (s.empty() || s.size() > 64) return false;
+    for (char c : s) {
+        const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' ||
+                        c == '_' || c == '.';
+        if (!ok) return false;
+    }
+    return true;
+}
+
+bool valid_data_dir(std::string_view s) {
+    if (s.empty() || s.size() > 260) return false;
+    for (char c : s) {
+        const unsigned char u = static_cast<unsigned char>(c);
+        if (u < 0x20 || u == 0x7F) return false;
+    }
+    return true;
+}
+
+// service status|events|install|uninstall|run -- same strictness as watch/scan: no duplicates,
+// no unknown flags, strict integers, nothing echoed unsanitized.
+ParsedArgs parse_service(const std::vector<std::string_view>& args) {
+    ParsedArgs p;
+    p.interval_seconds = kDefaultIntervalSeconds;
+    p.confirm_polls = kDefaultConfirmPolls;
+    if (args.size() < 2) {
+        p.error = "service needs a sub-command: status, events, install, uninstall or run";
+        return p;
+    }
+    const std::string_view sub = args[1];
+    ServiceCommand sc = ServiceCommand::None;
+    if (sub == "status") sc = ServiceCommand::Status;
+    else if (sub == "events") sc = ServiceCommand::Events;
+    else if (sub == "install") sc = ServiceCommand::Install;
+    else if (sub == "uninstall") sc = ServiceCommand::Uninstall;
+    else if (sub == "run") sc = ServiceCommand::Run;
+    else {
+        p.error = "unknown service sub-command: " + sanitize_for_display(sub);
+        return p;
+    }
+
+    bool seen_limit = false, seen_interval = false, seen_max = false, seen_confirm = false, seen_dir = false,
+         seen_pipe = false;
+    auto int_flag = [&](std::size_t& i, bool& seen, int lo, int hi, int& dst) {
+        const std::string name = sanitize_for_display(args[i]);
+        if (seen) {
+            p.error = "duplicate argument: " + name;
+            return false;
+        }
+        if (i + 1 >= args.size()) {
+            p.error = name + " needs a value";
+            return false;
+        }
+        if (!parse_int_in(args[i + 1], lo, hi, dst)) {
+            p.error = name + " must be an integer from " + std::to_string(lo) + " to " + std::to_string(hi) +
+                      ", got: " + sanitize_for_display(args[i + 1]);
+            return false;
+        }
+        seen = true;
+        ++i;
+        return true;
+    };
+    auto str_flag = [&](std::size_t& i, bool& seen, bool (*valid)(std::string_view), const char* what,
+                        std::string& dst) {
+        const std::string name = sanitize_for_display(args[i]);
+        if (seen) {
+            p.error = "duplicate argument: " + name;
+            return false;
+        }
+        if (i + 1 >= args.size() || args[i + 1].substr(0, 2) == "--") {
+            p.error = name + " needs a value";
+            return false;
+        }
+        if (!valid(args[i + 1])) {
+            p.error = name + " must be " + what + ", got: " + sanitize_for_display(args[i + 1]);
+            return false;
+        }
+        dst = std::string(args[i + 1]);
+        seen = true;
+        ++i;
+        return true;
+    };
+    constexpr const char* kPipeWhat = "1-64 characters from A-Z a-z 0-9 - _ .";
+    constexpr const char* kDirWhat = "1-260 characters without control characters";
+
+    for (std::size_t i = 2; i < args.size(); ++i) {
+        const std::string_view a = args[i];
+        if (a == "--json" && !p.json && (sc == ServiceCommand::Status || sc == ServiceCommand::Events)) {
+            p.json = true;
+        } else if (a == "--limit" && sc == ServiceCommand::Events) {
+            if (!int_flag(i, seen_limit, kMinEventsLimit, kMaxEventsLimit, p.limit)) return p;
+        } else if (a == "--dry-run" && !p.dry_run &&
+                   (sc == ServiceCommand::Install || sc == ServiceCommand::Uninstall)) {
+            p.dry_run = true;
+        } else if (a == "--console" && !p.console && sc == ServiceCommand::Run) {
+            p.console = true;
+        } else if (a == "--scm" && !p.scm && sc == ServiceCommand::Run) {
+            p.scm = true;
+        } else if (a == "--pipe-name" &&
+                   (sc == ServiceCommand::Status || sc == ServiceCommand::Events || sc == ServiceCommand::Run)) {
+            if (!str_flag(i, seen_pipe, valid_pipe_name, kPipeWhat, p.pipe_name)) return p;
+        } else if (a == "--data-dir" && sc == ServiceCommand::Run) {
+            if (!str_flag(i, seen_dir, valid_data_dir, kDirWhat, p.data_dir)) return p;
+        } else if (a == "--interval" && sc == ServiceCommand::Run) {
+            if (!int_flag(i, seen_interval, kMinIntervalSeconds, kMaxIntervalSeconds, p.interval_seconds)) return p;
+        } else if (a == "--confirm" && sc == ServiceCommand::Run) {
+            if (!int_flag(i, seen_confirm, kMinConfirmPolls, kMaxConfirmPolls, p.confirm_polls)) return p;
+        } else if (a == "--max-polls" && sc == ServiceCommand::Run) {
+            if (!int_flag(i, seen_max, 1, kMaxPollsLimit, p.max_polls)) return p;
+        } else {
+            p.error = "unexpected argument: " + sanitize_for_display(a);
+            return p;
+        }
+    }
+    if (sc == ServiceCommand::Run) {
+        if (p.console == p.scm) {
+            p.error = p.console ? "service run: --console and --scm are mutually exclusive"
+                                : "service run needs --console (foreground, for development) or --scm (internal)";
+            return p;
+        }
+        if (p.scm && (seen_dir || seen_pipe || seen_max || seen_interval || seen_confirm)) {
+            p.error = "service run --scm takes no other options";
+            return p;
+        }
+    }
+    p.service = sc;
+    p.command = Command::Service;
+    return p;
+}
+
 }  // namespace
 
 ParsedArgs parse_args(const std::vector<std::string_view>& args) {
@@ -125,6 +255,7 @@ ParsedArgs parse_args(const std::vector<std::string_view>& args) {
     }
     if (cmd == "watch") return parse_watch(args);
     if (cmd == "scan") return parse_scan(args);
+    if (cmd == "service") return parse_service(args);
     p.error = "unknown command: " + sanitize_for_display(cmd);
     return p;
 }
@@ -138,11 +269,19 @@ std::string usage_text(const std::string& version) {
            "                             Report status changes until Ctrl+C (--json: one JSON per line)\n"
            "  meta-sec scan --quick [--dry-run] [--json]\n"
            "                             Start ONE Defender quick scan after typed local approval (--dry-run: check only)\n"
+           "  meta-sec service status [--json]\n"
+           "                             Show whether the optional background service is installed/running\n"
+           "  meta-sec service events [--json] [--limit N]\n"
+           "                             Show recent events the service recorded (N: 1-200, default 50)\n"
+           "  meta-sec service install|uninstall [--dry-run]\n"
+           "                             Install/remove the background service after typed local approval (Administrator)\n"
+           "  meta-sec service run --console [--data-dir PATH] [--pipe-name NAME] [--interval S] [--confirm N] [--max-polls N]\n"
+           "                             Run the observer in this console (development; Ctrl+C stops)\n"
            "  meta-sec --version\n"
            "  meta-sec --help\n"
            "Exit codes: 0 ok, 1 audit violation, 2 command/engine error, "
            "3 incomplete observation (watch: judged on the last poll; scan: not confirmed), "
-           "4 scan refused (not applicable or not approved)\n";
+           "4 scan/service change refused (not applicable or not approved)\n";
 }
 
 std::string sanitize_for_display(std::string_view s) {

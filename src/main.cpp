@@ -255,6 +255,10 @@ int wmain(int argc, wchar_t** argv) {
                 return run_watch_command(parsed, version);
             case Command::Scan:
                 return run_scan_command(parsed, version);
+            case Command::Service:
+                // Placeholder until the Windows half (SCM, pipe, ACL) is wired in.
+                std::cerr << "meta-sec: service commands are not available in this build yet\n";
+                return kExitError;
         }
         return kExitError;
     } catch (const std::exception& e) {

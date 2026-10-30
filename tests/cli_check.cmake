@@ -450,6 +450,21 @@ elseif(MODE STREQUAL "scan_bad_args")
       message(FATAL_ERROR "scan ${bad}: stderr missing diagnostic")
     endif()
   endforeach()
+elseif(MODE STREQUAL "service_bad_args")
+  foreach(bad "service" "service;frobnicate" "service;status;--bogus" "service;status;extra" "service;status;--json;--json"
+              "service;events;--limit;0" "service;events;--limit;201" "service;events;--limit;abc" "service;events;--limit"
+              "service;install;--yes" "service;install;--force" "service;uninstall;--json"
+              "service;run" "service;run;--console;--scm" "service;run;--scm;--max-polls;3"
+              "service;run;--max-polls;3" "service;run;--console;--pipe-name;a/b" "service;run;--console;--data-dir")
+    run(${bad})
+    expect_rc(2)
+    if(NOT OUT STREQUAL "")
+      message(FATAL_ERROR "service ${bad}: errors must go to stderr, stdout had: ${OUT}")
+    endif()
+    if(ERR STREQUAL "")
+      message(FATAL_ERROR "service ${bad}: stderr missing diagnostic")
+    endif()
+  endforeach()
 elseif(MODE STREQUAL "bad_command")
   run(frobnicate)
   expect_rc(2)
