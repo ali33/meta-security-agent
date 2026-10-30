@@ -22,4 +22,4 @@ Captured 2026-10-31 from branch `feat/mvp4-service` (from `main` 4e937e7). Host 
 - Restart in the same data dir: a second run added its own lifecycle rows and no duplicates (also asserted by the integration test).
 
 ## NOT tested
-Install/uninstall for real; running under SCM (STOP/SHUTDOWN/PRESHUTDOWN); survival across reboot; LocalService access to Defender WMI and firewall (unmeasured: fallback is a different account, a human decision); Event Log record of install/uninstall; pipe/data-dir ACLs on a real installed service; Windows Server; a real Defender-primary machine.
+Install/uninstall for real; running under SCM (STOP/SHUTDOWN/PRESHUTDOWN); survival across reboot; LocalService access to Defender WMI and firewall (unmeasured: fallback is a different account, a human decision); Event Log record of install/uninstall; attack tests on the pipe SDDL (hostile client, ACL probing) beyond the unit and flood tests; pipe/data-dir ACLs on a real installed service; Windows Server; a real Defender-primary machine.
