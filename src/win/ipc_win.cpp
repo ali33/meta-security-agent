@@ -122,7 +122,7 @@ bool IpcServer::start(std::string& error) {
         return false;
     }
     try {
-        for (HANDLE h : pipes_) threads_.emplace_back([this, h] { worker(h); });
+        for (HANDLE h : pipes_) threads_.emplace_back([this, h, reserved = (h == pipes_.front())] { worker(h, reserved); });
     } catch (...) {
         stop();
         error = "cannot start the pipe workers";
@@ -148,7 +148,7 @@ IpcCounters IpcServer::counters() const {
     return {connections_.load(), served_.load(), rejected_.load(), timeouts_.load(), io_errors_.load()};
 }
 
-void IpcServer::worker(HANDLE pipe) {
+void IpcServer::worker(HANDLE pipe, bool reserved) {
     HANDLE ev = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     if (!ev) {
         ++io_errors_;
@@ -182,7 +182,7 @@ void IpcServer::worker(HANDLE pipe) {
         if (connected) {
             ++connections_;
             try {
-                serve(pipe, ev);
+                serve(pipe, ev, reserved);
             } catch (...) {
                 ++io_errors_;  // never let one connection take the worker (and the instance) down
             }
@@ -195,10 +195,12 @@ void IpcServer::worker(HANDLE pipe) {
     CloseHandle(ev);
 }
 
-void IpcServer::serve(HANDLE pipe, HANDLE io_event) {
+void IpcServer::serve(HANDLE pipe, HANDLE io_event, bool reserved) {
     // 1. Read the request: at most kIpcMaxRequestBytes + 1 bytes, up to the first '\n', within the deadline.
     std::string req;
-    const ULONGLONG read_deadline = deadline_in(cfg_.io_timeout_ms);
+    // The whole request line must arrive quickly: a legitimate client writes it in the same breath it connects.
+    // The reserved instance recycles twice as fast, so one instance is always free again within a fraction of a second.
+    const ULONGLONG read_deadline = deadline_in(reserved ? cfg_.request_timeout_ms / 2 : cfg_.request_timeout_ms);
     char buf[kIpcMaxRequestBytes + 1];
     for (;;) {
         const DWORD want = static_cast<DWORD>(sizeof buf - req.size());
@@ -253,7 +255,7 @@ void IpcServer::serve(HANDLE pipe, HANDLE io_event) {
     // 4. Let the client finish: wait (bounded) until it closes its end, discarding anything more it sends
     //    (this also lets a client that is still writing an oversize request complete and read our error).
     //    DisconnectNamedPipe would otherwise throw away a reply the client has not read yet.
-    const ULONGLONG drain_deadline = deadline_in(cfg_.io_timeout_ms);
+    const ULONGLONG drain_deadline = deadline_in(reserved ? cfg_.request_timeout_ms / 2 : cfg_.request_timeout_ms);
     for (;;) {
         DWORD got = 0;
         const Io r = overlapped_io(pipe, true, buf, sizeof buf, got, drain_deadline, io_event, stop_event_);

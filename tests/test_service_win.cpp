@@ -343,6 +343,40 @@ void test_data_dir() {
         const DirCheck via = prepare_data_dir(link / "svc2", DirMode::Service, me);
         CHECK(!via.ok && contains(via.error, "reparse point"));
     }
+    {  // Service mode: a PRE-EXISTING directory owned by the invoking account (not SYSTEM/Administrators/service) is refused
+        const auto d = t.dir() / "pre";
+        CHECK(prepare_data_dir(d, DirMode::UserOnly).ok);  // owner: this account
+        const DirCheck c = prepare_data_dir(d, DirMode::Service);
+        CHECK(!c.ok && contains(c.error, "untrusted account"));
+    }
+    {  // Service mode: children must be plain files; hard links, sub-directories and reparse points are refused
+        const auto d = t.dir() / "kids";
+        CHECK(prepare_data_dir(d, DirMode::Service, me).ok);
+        std::FILE* f = nullptr;
+        _wfopen_s(&f, (d / "events.db").c_str(), L"wb");
+        if (f) std::fclose(f);
+        CHECK(prepare_data_dir(d, DirMode::Service, me).ok);  // a normal store file is fine
+        CHECK(CreateHardLinkW((d / "alias").c_str(), (d / "events.db").c_str(), nullptr) != FALSE);
+        DirCheck c = prepare_data_dir(d, DirMode::Service, me);
+        CHECK(!c.ok && contains(c.error, "hard-linked"));
+        DeleteFileW((d / "alias").c_str());
+        CHECK(prepare_data_dir(d, DirMode::Service, me).ok);
+        std::filesystem::create_directory(d / "sub");
+        c = prepare_data_dir(d, DirMode::Service, me);
+        CHECK(!c.ok && contains(c.error, "sub-directory"));
+        RemoveDirectoryW((d / "sub").c_str());
+        const auto target = t.dir() / "jt";
+        std::filesystem::create_directories(target);
+        JunctionGuard g{d / "j"};
+        CHECK(make_junction(d / "j", target));
+        c = prepare_data_dir(d, DirMode::Service, me);
+        CHECK(!c.ok && contains(c.error, "reparse point"));
+    }
+    {  // UNC / device paths are never used
+        CHECK(!prepare_data_dir(L"\\\\server\\share\\x", DirMode::UserOnly).ok);
+        CHECK(!prepare_data_dir(L"\\\\?\\C:\\x", DirMode::Service).ok);
+        CHECK(!prepare_data_dir(L"\\\\.\\C:\\x", DirMode::UserOnly).ok);
+    }
     {  // not absolute / empty
         CHECK(!prepare_data_dir("relative\\dir", DirMode::UserOnly).ok);
         CHECK(!prepare_data_dir("", DirMode::Service).ok);
@@ -441,11 +475,13 @@ void test_round_trip_and_hostile_clients() {
     const IpcSnapshot before = ipc_fetch_status(s.client());
     DWORD elapsed = 0;
     CHECK(silent_client_cut_off(pipe_path(pipe), 8000, &elapsed));
-    CHECK(elapsed >= 1000 && elapsed < 6000);  // timeout is 2 s: neither instant nor unbounded
+    CHECK(elapsed >= 150 && elapsed < 2000);  // request deadline is 500 ms (250 ms on the reserved instance): neither instant nor unbounded
     {
         std::vector<std::thread> silent;
         std::atomic<int> cut{0};
-        for (int i = 0; i < kPipeMaxInstances; ++i)
+        const int kSilent = kPipeMaxInstances + 2;  // more silent connections than instances
+        const ULONGLONG flood_start = GetTickCount64();
+        for (int i = 0; i < kSilent; ++i)
             silent.emplace_back([&] {
                 if (silent_client_cut_off(pipe_path(pipe), 8000, nullptr)) ++cut;
             });
@@ -453,7 +489,8 @@ void test_round_trip_and_hostile_clients() {
         const IpcSnapshot during = ipc_fetch_status(s.client());  // waits for a free instance (bounded), then succeeds
         CHECK(during.reach == IpcReach::Ok);
         for (auto& th : silent) th.join();
-        CHECK(cut == kPipeMaxInstances);
+        CHECK(cut == kSilent);
+        CHECK(GetTickCount64() - flood_start < 5000);  // two waves of 500 ms plus slack, not 2 s each
     }
     // 10 KB written slowly... or a client that sends a partial line and stalls
     {

@@ -95,6 +95,20 @@ std::string known_folder_utf8(REFKNOWNFOLDERID id) {
 
 // ---- side effects: reachable ONLY through real_service_change_hooks() -------------------------
 
+// One persistent record of an install/uninstall attempt in the Application event log (source "MetaSecAgent";
+// works without a registered message file, Event Viewer then shows the raw string). Strings: action, actor,
+// result code only. Best effort: false if the log cannot be written.
+bool write_audit_event(const std::string& action, const std::string& actor, const std::string& result) {
+    HANDLE src = RegisterEventSourceW(nullptr, kServiceNameW);
+    if (!src) return false;
+    const std::wstring text = L"service " + to_wide(action) + L" | actor: " + to_wide(actor) + L" | result: " + to_wide(result);
+    const wchar_t* strings[1] = {text.c_str()};
+    const WORD type = result == "DONE" ? EVENTLOG_INFORMATION_TYPE : EVENTLOG_WARNING_TYPE;
+    const BOOL ok = ReportEventW(src, type, 0, 1000, nullptr, 1, 0, strings, nullptr);
+    DeregisterEventSource(src);
+    return ok != FALSE;
+}
+
 ServiceChangeOutcome fail(const std::string& code, const std::string& detail) {
     ServiceChangeOutcome o;
     o.error_code = code;
@@ -389,6 +403,9 @@ ServiceChangeHooks real_service_change_hooks() {
     h.ask_approval = [](const std::string& prompt) { return console_approval(prompt); };
     h.actor = [] { return current_actor(); };
     h.now_utc = [] { return format_utc(std::chrono::system_clock::now()); };
+    h.record_audit = [](const std::string& action, const std::string& actor, const std::string& result) {
+        return write_audit_event(action, actor, result);
+    };
     h.install = [](const std::string& exe) { return install_side_effect(exe); };
     h.uninstall = [] { return uninstall_side_effect(); };
     return h;

@@ -28,7 +28,8 @@
 namespace metasec::win {
 
 inline constexpr int kPipeMaxInstances = 4;
-inline constexpr DWORD kPipeIoTimeoutMs = 2000;
+inline constexpr DWORD kPipeIoTimeoutMs = 2000;       // reply write deadline (x2) and client-side waits
+inline constexpr DWORD kPipeRequestTimeoutMs = 500;  // server: the whole request line, and the wait for the client to close
 inline constexpr DWORD kPipeBufferBytes = 4096;
 // CreateNamedPipeW flags. Exposed so tests can assert the security-relevant ones.
 inline constexpr DWORD kPipeOpenModeFirst = PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE | FILE_FLAG_OVERLAPPED;
@@ -65,6 +66,7 @@ public:
         std::wstring server_sid;
         int instances = kPipeMaxInstances;
         DWORD io_timeout_ms = kPipeIoTimeoutMs;
+        DWORD request_timeout_ms = kPipeRequestTimeoutMs;
     };
     struct Hooks {
         std::function<ObserverStatus()> status;
@@ -85,8 +87,8 @@ public:
     int instances() const { return static_cast<int>(pipes_.size()); }  // pipe instances actually created
 
 private:
-    void worker(HANDLE pipe);
-    void serve(HANDLE pipe, HANDLE io_event);
+    void worker(HANDLE pipe, bool reserved);
+    void serve(HANDLE pipe, HANDLE io_event, bool reserved);
 
     Config cfg_;
     Hooks hooks_;

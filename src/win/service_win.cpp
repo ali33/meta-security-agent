@@ -83,7 +83,10 @@ private:
 std::mutex g_status_mu;
 SERVICE_STATUS g_status{};
 SERVICE_STATUS_HANDLE g_status_handle = nullptr;
+// Created once, never closed: the control handler may run on another thread at any moment, and the process ends
+// right after ServiceMain returns, so there is no window in which the handle could be used after it was closed.
 HANDLE g_stop_event = nullptr;
+std::atomic<DWORD> g_service_exit{NO_ERROR};  // what ServiceMain reported as the Win32 exit code
 std::string g_version;
 
 // Reports `state`. Pending states carry an increasing checkpoint and a wait hint; the service accepts
@@ -148,7 +151,10 @@ void WINAPI service_main(DWORD, LPWSTR*) {
                 if (!com.ok()) {
                     exit_code = ERROR_SERVICE_SPECIFIC_ERROR;
                 } else {
-                    run_host(cfg);
+                    const HostResult res = run_host(cfg);
+                    // A host that ends by itself (not because the SCM asked) or on an error is a failure the SCM must see.
+                    if (res.observer.stop == ObserverStop::Error) exit_code = ERROR_SERVICE_SPECIFIC_ERROR;
+                    else if (WaitForSingleObject(cfg.stop_event, 0) != WAIT_OBJECT_0) exit_code = ERROR_SERVICE_SPECIFIC_ERROR;
                 }
             } catch (...) {
                 exit_code = ERROR_EXCEPTION_IN_SERVICE;
@@ -168,10 +174,7 @@ void WINAPI service_main(DWORD, LPWSTR*) {
         if (worker.joinable()) worker.join();
     }
     if (worker_done) CloseHandle(worker_done);
-    if (g_stop_event) {
-        CloseHandle(g_stop_event);
-        g_stop_event = nullptr;
-    }
+    g_service_exit = exit_code;
     report(SERVICE_STOPPED, exit_code);
 }
 
@@ -313,7 +316,7 @@ int run_service_scm(const std::string& version) {
             std::cerr << "meta-sec: cannot connect to the Service Control Manager (WIN32:" << GetLastError() << ")\n";
         return kExitError;
     }
-    return kExitOk;
+    return g_service_exit == NO_ERROR ? kExitOk : kExitError;  // the process exit code mirrors what the SCM was told
 }
 
 }  // namespace metasec::win

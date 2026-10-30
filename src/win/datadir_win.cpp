@@ -36,6 +36,12 @@ struct HandleDeleter {
     }
 };
 using Handle = std::unique_ptr<void, HandleDeleter>;
+struct FindCloser {
+    void operator()(void* h) const {
+        if (h && h != INVALID_HANDLE_VALUE) FindClose(h);
+    }
+};
+using FindHandle = std::unique_ptr<void, FindCloser>;
 
 std::string code_of(DWORD e) { return "WIN32:" + std::to_string(e); }
 
@@ -66,6 +72,45 @@ std::vector<std::wstring> allowed_sids(DirMode mode, const std::wstring& extra) 
     else v.push_back(current_user_sid_string());
     if (!extra.empty()) v.push_back(extra);
     return v;
+}
+
+// Service mode: everything already inside the directory must be what the service itself would have made.
+// "" when fine, else why not. Entries must be plain files (no sub-directory, no reparse point, no extra hard
+// link -- a hard link would let another path alias a store file) owned by a trusted account.
+std::string children_problem(const std::filesystem::path& dir, const std::vector<std::wstring>& trusted) {
+    WIN32_FIND_DATAW fd{};
+    HANDLE find = FindFirstFileW((dir / L"*").c_str(), &fd);
+    if (find == INVALID_HANDLE_VALUE) {
+        const DWORD e = GetLastError();
+        return e == ERROR_FILE_NOT_FOUND ? std::string() : "cannot list the data directory (" + code_of(e) + ")";
+    }
+    FindHandle guard(find);
+    do {
+        const std::wstring name = fd.cFileName;
+        if (name == L"." || name == L"..") continue;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) return "the data directory contains a reparse point";
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) return "the data directory contains an unexpected sub-directory";
+        HANDLE raw = CreateFileW((dir / name).c_str(), READ_CONTROL | FILE_READ_ATTRIBUTES,
+                                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+                                 FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+        if (raw == INVALID_HANDLE_VALUE) return "cannot inspect an entry of the data directory (" + code_of(GetLastError()) + ")";
+        Handle h(raw);
+        BY_HANDLE_FILE_INFORMATION bi{};
+        if (!GetFileInformationByHandle(raw, &bi)) return "cannot inspect an entry of the data directory";
+        if (bi.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) return "the data directory contains a reparse point";
+        if (bi.nNumberOfLinks > 1) return "the data directory contains a hard-linked file";
+        PSID owner = nullptr;
+        PSECURITY_DESCRIPTOR sd_raw = nullptr;
+        const DWORD rc = GetSecurityInfo(raw, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION, &owner, nullptr, nullptr, nullptr, &sd_raw);
+        LocalMem sd(sd_raw);
+        if (rc != ERROR_SUCCESS) return "cannot read the owner of an entry of the data directory";
+        const std::wstring o = sid_to_string(owner);
+        bool ok = false;
+        for (const auto& t : trusted)
+            if (!t.empty() && t == o) ok = true;
+        if (!ok) return "the data directory contains a file owned by another account";
+    } while (FindNextFileW(find, &fd));
+    return {};
 }
 
 }  // namespace
@@ -116,8 +161,8 @@ std::wstring data_dir_sddl(DirMode mode, const std::wstring& extra) {
 
 DirCheck prepare_data_dir(const std::filesystem::path& dir, DirMode mode, const std::wstring& extra_full_control_sid) {
     DirCheck r;
-    if (dir.empty() || !dir.is_absolute()) {
-        r.error = "data directory path is empty or not absolute";
+    if (dir.empty() || !dir.is_absolute() || dir.native().rfind(L"\\\\", 0) == 0) {  // UNC, \.\ and \?\ forms are never used
+        r.error = "data directory path is empty, not absolute, or a UNC/device path";
         return r;
     }
     const std::wstring sddl = data_dir_sddl(mode, extra_full_control_sid);
@@ -202,8 +247,12 @@ DirCheck prepare_data_dir(const std::filesystem::path& dir, DirMode mode, const 
         r.error = "cannot read the data directory's access rules (" + code_of(rc) + ")";
         return r;
     }
+    // Service mode: a pre-existing directory must belong to SYSTEM, Administrators or the service SID -- never to
+    // the account the process happens to run as (that would accept a directory pre-created by that account's
+    // other programs). Only a directory created a moment ago by this very call may be owned by the creator.
+    // Foreground mode keeps current-user semantics.
     std::vector<std::wstring> trusted_owners = allowed_sids(mode, extra_full_control_sid);
-    trusted_owners.push_back(current_user_sid_string());  // whoever legitimately created it (the service account at first start)
+    if (mode == DirMode::UserOnly || r.created) trusted_owners.push_back(current_user_sid_string());
     const std::wstring owner_s = sid_to_string(owner);
     bool owner_ok = false;
     for (const auto& s : trusted_owners)
@@ -211,6 +260,17 @@ DirCheck prepare_data_dir(const std::filesystem::path& dir, DirMode mode, const 
     if (!owner_ok) {
         r.error = "the data directory is owned by an untrusted account; refusing to use it";
         return r;
+    }
+
+    if (mode == DirMode::Service) {
+        // Files the service itself wrote are owned by the running account (LocalService), so that one is accepted here.
+        std::vector<std::wstring> child_owners = allowed_sids(mode, extra_full_control_sid);
+        child_owners.push_back(current_user_sid_string());
+        const std::string bad = children_problem(dir, child_owners);
+        if (!bad.empty()) {
+            r.error = bad + "; refusing to use it";
+            return r;
+        }
     }
 
     // Development directory chosen by the user that already holds files: do not rewrite its rules.
