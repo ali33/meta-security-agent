@@ -727,6 +727,16 @@ void test_cli_service_reject() {
         {"service", "run", "--console", "--interval", "5", "--interval", "6"},
         {"service", "run", "--console", "--data-dir"},
         {"service", "run", "--console", "--data-dir", ""},
+        {"service", "run", "--console", "--data-dir", "\\\\server\\share\\x"},   // UNC
+        {"service", "run", "--console", "--data-dir", "\\\\.\\pipe\\x"},         // device
+        {"service", "run", "--console", "--data-dir", "\\\\?\\C:\\x"},           // extended-length
+        {"service", "run", "--console", "--data-dir", "..\\up"},                 // relative, climbs out
+        {"service", "run", "--console", "--data-dir", "C:\\a\\..\\b"},
+        {"service", "run", "--console", "--data-dir", "a/../b"},
+        {"service", "run", "--console", "--data-dir", "/rooted"},
+        {"service", "run", "--console", "--pipe-name", "."},
+        {"service", "run", "--console", "--pipe-name", ".."},
+        {"service", "status", "--pipe-name", ".."},
         {"service", "run", "--console", "--data-dir", "--pipe-name", "x"},
         {"service", "run", "--console", "--data-dir", std::string(261, 'd')},
         {"service", "run", "--console", "--data-dir", "bad\x01path"},

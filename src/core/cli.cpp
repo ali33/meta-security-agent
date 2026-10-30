@@ -87,7 +87,7 @@ ParsedArgs parse_scan(const std::vector<std::string_view>& args) {
 }
 
 bool valid_pipe_name(std::string_view s) {
-    if (s.empty() || s.size() > 64) return false;
+    if (s.empty() || s.size() > 64 || s == "." || s == "..") return false;
     for (char c : s) {
         const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' ||
                         c == '_' || c == '.';
@@ -101,6 +101,17 @@ bool valid_data_dir(std::string_view s) {
     for (char c : s) {
         const unsigned char u = static_cast<unsigned char>(c);
         if (u < 0x20 || u == 0x7F) return false;
+    }
+    // No UNC (two backslashes + server), device (backslash-dot, backslash-question) or rooted-without-drive paths,
+    // and no ".." segment anywhere (a relative path climbing out of the working directory could put a "dev" directory
+    // somewhere surprising).
+    if (s.front() == '\\' || s.front() == '/') return false;
+    std::size_t i = 0;
+    while (i <= s.size()) {
+        std::size_t j = s.find_first_of("\\/", i);
+        if (j == std::string_view::npos) j = s.size();
+        if (s.substr(i, j - i) == "..") return false;
+        i = j + 1;
     }
     return true;
 }
