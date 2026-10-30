@@ -90,6 +90,8 @@ State classify_failure(std::uint32_t hr) {
         case 0x8004100Eu:  // WBEM_E_INVALID_NAMESPACE
         case 0x80041010u:  // WBEM_E_INVALID_CLASS
         case 0x80070032u:  // HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED)
+        case 0x8007007Eu:  // HRESULT_FROM_WIN32(ERROR_MOD_NOT_FOUND), e.g. no wscapi.dll on Server
+        case 0x8007007Fu:  // HRESULT_FROM_WIN32(ERROR_PROC_NOT_FOUND)
         case 0x80070426u:  // HRESULT_FROM_WIN32(ERROR_SERVICE_DOES_NOT_EXIST)
             return State::NotSupported;
         default:

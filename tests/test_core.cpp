@@ -111,6 +111,8 @@ void test_failures() {
     CHECK(classify_failure(0x80070032u) == State::NotSupported);  // ERROR_NOT_SUPPORTED
     CHECK(classify_failure(0x80004002u) == State::NotSupported);  // E_NOINTERFACE
     CHECK(classify_failure(0x80070426u) == State::NotSupported);  // service does not exist
+    CHECK(classify_failure(0x8007007Eu) == State::NotSupported);  // module not found (wscapi.dll)
+    CHECK(classify_failure(0x8007007Fu) == State::NotSupported);  // procedure not found
     CHECK(classify_failure(0x80070425u) == State::Unknown);       // service not active: transient
     CHECK(classify_failure(0x80070005u) == State::Unknown);       // access denied
     CHECK(classify_failure(0x80004005u) == State::Unknown);       // E_FAIL

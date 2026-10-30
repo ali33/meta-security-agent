@@ -23,7 +23,7 @@ add_library(metasec_win STATIC
   src/win/wsc_win.cpp
   src/win/defender_win.cpp
   src/win/collect_win.cpp)
-target_link_libraries(metasec_win PUBLIC metasec_core ole32 oleaut32 wbemuuid Wscapi)
+target_link_libraries(metasec_win PUBLIC metasec_core ole32 oleaut32 wbemuuid)
 
 add_executable(meta-sec src/main.cpp)
 target_link_libraries(meta-sec PRIVATE metasec_win)
@@ -36,7 +36,7 @@ foreach(t metasec_core metasec_win meta-sec)
   endif()
 endforeach()
 if(MSVC)
-  # Hardening: control-flow guard, CET shadow stack, and no DLL search-path planting (Wscapi).
+  # Hardening: control-flow guard, CET shadow stack, and no DLL search-path planting.
   target_link_options(meta-sec PRIVATE /guard:cf /CETCOMPAT /DEPENDENTLOADFLAG:0x800)
 endif()
 
