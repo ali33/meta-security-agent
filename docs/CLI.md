@@ -1,12 +1,13 @@
 # CLI contract
 
-Current implementation (MVP-0 status, MVP-1 audit):
+Current implementation (MVP-0 status, MVP-1 audit, MVP-2 watch):
 ```powershell
 meta-sec.exe --help
 meta-sec.exe --version
 meta-sec.exe status
 meta-sec.exe status --json
 meta-sec.exe audit [--json]
+meta-sec.exe watch [--json] [--interval S] [--max-polls N] [--confirm N]
 ```
 
 Exit codes today: `0` observation complete (`OBSERVED` or `OBSERVED_WITH_ISSUES`), `2` bad arguments or engine failure (diagnostic on stderr, nothing on stdout), `3` incomplete observation (`INCOMPLETE`). `status` never returns 1; `1` is returned by `audit` for a confirmed FAIL (see below).
@@ -72,9 +73,47 @@ The 3-day threshold is a documented constant: Defender intelligence is published
 - `provenance.check_ids` are the `status` check ids (and `av_products`) the verdict depends on; `sources` are the underlying data sources (`INetFwPolicy2`, `WscGetSecurityProviderHealth`, `WMI:ROOT\Microsoft\Windows\Defender:MSFT_MpComputerStatus`, `WMI:ROOT\SecurityCenter2:AntiVirusProduct`).
 - `status --json` is unchanged (schema 1 with the `name`/`error` aliases).
 
+## `watch` (MVP-2)
+
+```powershell
+meta-sec.exe watch                                  # text lines until Ctrl+C
+meta-sec.exe watch --json                           # NDJSON: one JSON object per line
+meta-sec.exe watch --json --interval 5 --max-polls 12 --confirm 2
+```
+
+`watch` polls the same read-only collectors as `status` and reports **changes**. It never changes a setting, uses no network, and keeps no state between runs (persistence is MVP-4/5).
+
+| Option | Default | Range | Meaning |
+|---|---|---|---|
+| `--interval S` | 30 | 1..3600 | Seconds between the end of one poll and the start of the next |
+| `--max-polls N` | unlimited | 1..1,000,000 | Stop after N polls (deterministic stop for scripts and CI) |
+| `--confirm N` | 2 | 1..10 | Debounce: a new value is reported only after N **consecutive** polls show it |
+| `--json` | off | | NDJSON instead of text |
+
+Anything else, a missing/non-numeric/out-of-range value or a repeated option exits 2 with a diagnostic on stderr and nothing on stdout.
+
+**Lifecycle.** The first poll is printed once as a `baseline` (all checks and their current state; no history is replayed). Each later poll prints nothing unless a check's confirmed state changed. On exit a final `stopped` line is printed. Ctrl+C, Ctrl+Break and closing the console stop the loop cleanly (the wait is interrupted at once; the `stopped` line has `"reason":"interrupted"`). Idle cost is one blocking wait; CPU is spent only during a poll.
+
+**Exit codes.** `0` stopped normally and the last poll observed everything; `3` stopped normally but the last poll was `INCOMPLETE` (same rule as `status`; e.g. a Windows Server runner where Security Center is `NOT_SUPPORTED`); `2` bad arguments, COM failure, or stdout could not be written (`reason":"output_failed"` is attempted but may not be deliverable). `watch` never returns `1`: judging is `audit`'s job.
+
+**What counts as one change.** The tracked value of a check is its `state` (so `ENABLED -> DISABLED`, `GOOD -> POOR`, `PASSIVE -> ENABLED` are changes; a different `evidence` or `observed_at_utc` alone is not). A change is reported once, when the new state has been seen on `--confirm` consecutive polls; the event's `observed_at_utc` is the confirming poll and `first_observed_at_utc` the first poll that showed it. With the default interval 30 s and confirm 2, a change is reported 30..60 s after it happened. A value that reverts before confirmation (flapping, one-poll glitch) is dropped silently; a value that alternates faster than `--confirm` polls is therefore never reported. The pending candidate restarts if the observation becomes a third value.
+
+**UNKNOWN is not "turned off".** A check that stops being readable (`UNKNOWN`/`NOT_SUPPORTED`) after `--confirm` polls is an `observation_lost` event, never a `change` to a disabled state; its later recovery is `observation_restored`. A one-poll read error produces no event. Every transition of `UNKNOWN` to a state, including back to the old one, is reported, because the observation gap itself is information.
+
+### `watch --json` events (`schema_version` 1, `"command":"watch"`)
+Common fields: `schema_version`, `command`, `event`, `observed_at_utc`.
+
+- `baseline` (always first): `product, version, mode, hostname, platform{}, interval_seconds, confirm_polls, checks[]` where each check has `check_id, state, posture, source, error_code, evidence{}` (same meaning as `status`).
+- `change`, `observation_lost`, `observation_restored`, `check_added`, `check_removed`: `first_observed_at_utc, check_id, from, to, from_posture, to_posture, confirmations, source, error_code, evidence{}`. `from` is `null` for `check_added`, `to` is `null` for `check_removed`; `evidence`/`source`/`error_code` describe the new value (the last seen value for a removal). `confirmations >= confirm_polls`.
+- `stopped` (always last): `reason` (`max_polls | interrupted | output_failed`), `polls`, `events` (count of non-baseline, non-stopped lines).
+
+```json
+{"schema_version":1,"command":"watch","event":"change","observed_at_utc":"2026-10-30T00:01:00Z","first_observed_at_utc":"2026-10-30T00:00:30Z","check_id":"firewall.public","from":"ENABLED","to":"DISABLED","from_posture":"OK","to_posture":"ATTENTION","confirmations":2,"source":"INetFwPolicy2","error_code":"","evidence":{}}
+```
+Text mode prints the same information one line per event (`<utc> [CHANGE] firewall.public: ENABLED -> DISABLED (ATTENTION)`).
+
 Future:
 ```text
-meta-sec watch
 meta-sec scan --quick
 meta-sec threats list
 meta-sec service status

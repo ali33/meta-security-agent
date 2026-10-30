@@ -58,3 +58,21 @@ Boxes stay unchecked until a human accepts. Details and raw output in [evidence/
 | Real-OS run | PASS on Windows 11 Pro 10.0.26200, non-admin: all rules PASS/NOT_APPLICABLE, exit 0 (this machine is healthy, so no real FAIL was observed) |
 | Windows Server (`ROOT\SecurityCenter2` absent -> NOT_SUPPORTED path), elevated run, second machine | NOT TESTED |
 | Read-only, no network, no secrets | by design; WMI/COM queries only |
+
+
+## MVP-2 status record (2026-10-30, branch `feat/mvp2-watch`, from `main` at `8410f93`)
+Boxes stay unchecked until a human accepts. Details and raw output in [evidence/mvp2-win11.md](evidence/mvp2-win11.md).
+
+| Item (HANDOFF section F, MVP 2: "One controlled change generates one timestamped alert, no replay storm") | Result |
+|---|---|
+| `meta-sec watch` runs, polls the status collectors read-only, stops on Ctrl+C / Ctrl+Break or `--max-polls` | PASS on Windows 11 (non-admin). Ctrl+Break verified: stops within 13 ms, `stopped` line, exit 0, empty stderr |
+| One change -> exactly one timestamped event (`observed_at_utc`, `check_id`, `from`, `to`, evidence) | PASS with **injected fake snapshots** (`tests/test_watch.cpp`, pure `WatchTracker` + loop with hooks) |
+| Controlled change on a real lab machine | **NOT VERIFIED.** The machine is non-admin and read-only by rule; no firewall/Defender/AV setting was changed. The real run saw 0 changes in a healthy steady state |
+| No replay storm | PASS: baseline printed once; an unchanged state yields no line (unit tests, 20-poll steady loop, real 3-poll and 130-poll runs) |
+| Flapping / transient errors | PASS: debounce `--confirm` (default 2 consecutive polls); E,D,E,D... and one-poll UNKNOWN produce no event |
+| UNKNOWN never reported as "disabled" | PASS: persistent loss is `observation_lost` (to=UNKNOWN), recovery is `observation_restored`; asserted that neither rendering contains DISABLED |
+| NDJSON valid, clean stdout, stderr empty | PASS: every line parsed by CMake's JSON parser (unit stream and real `watch --json`) |
+| Bad arguments -> exit 2, stderr only | PASS (16 unit cases + e2e `watch_bad_args`) |
+| Resource use over time | PASS on one 130-poll run, see evidence (handles/private bytes flat; CPU low). Not a soak test |
+| Windows Server (WSC absent), elevated run, second machine | NOT TESTED (CI on windows-latest runs the e2e cases, which accept exit 0 or 3) |
+| Read-only, no network, no persistence | by design; no new Windows API besides `SetConsoleCtrlHandler` and an event for the stop signal |
