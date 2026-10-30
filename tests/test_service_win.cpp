@@ -22,6 +22,7 @@
 #include "core/service_model.hpp"
 #include "core/store.hpp"
 #include "temp_dir.hpp"
+#include "win/collect.hpp"
 #include "win/datadir_win.hpp"
 #include "win/ipc_win.hpp"
 #include "win/scm_win.hpp"
@@ -347,7 +348,9 @@ void test_data_dir() {
         const auto d = t.dir() / "pre";
         CHECK(prepare_data_dir(d, DirMode::UserOnly).ok);  // owner: this account
         const DirCheck c = prepare_data_dir(d, DirMode::Service);
-        CHECK(!c.ok && contains(c.error, "untrusted account"));
+        // An elevated account creates directories owned by Administrators, which Service mode rightly
+        // trusts (CI runners are elevated), so the refusal can only be demonstrated from a standard token.
+        if (!metasec::win::process_elevated()) CHECK(!c.ok && contains(c.error, "untrusted account"));
     }
     {  // Service mode: children must be plain files; hard links, sub-directories and reparse points are refused
         const auto d = t.dir() / "kids";
