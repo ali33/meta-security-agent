@@ -12,6 +12,7 @@ add_library(metasec_core STATIC
   src/core/json.cpp
   src/core/types.cpp
   src/core/interpret.cpp
+  src/core/audit.cpp
   src/core/render.cpp
   src/core/cli.cpp)
 target_include_directories(metasec_core PUBLIC src)
@@ -22,6 +23,7 @@ add_library(metasec_win STATIC
   src/win/firewall_win.cpp
   src/win/wsc_win.cpp
   src/win/defender_win.cpp
+  src/win/av_products_win.cpp
   src/win/collect_win.cpp)
 target_link_libraries(metasec_win PUBLIC metasec_core ole32 oleaut32 wbemuuid)
 

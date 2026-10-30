@@ -27,7 +27,7 @@ ParsedArgs parse_args(const std::vector<std::string_view>& args) {
         p.command = Command::Version;
         return p;
     }
-    if (cmd == "status") {
+    if (cmd == "status" || cmd == "audit") {
         for (std::size_t i = 1; i < args.size(); ++i) {
             if (args[i] == "--json" && !p.json) {
                 p.json = true;
@@ -36,7 +36,7 @@ ParsedArgs parse_args(const std::vector<std::string_view>& args) {
                 return p;
             }
         }
-        p.command = Command::Status;
+        p.command = cmd == "audit" ? Command::Audit : Command::Status;
         return p;
     }
     p.error = "unknown command: " + sanitize_for_display(cmd);
@@ -47,9 +47,10 @@ std::string usage_text(const std::string& version) {
     return std::string(kProduct) + " v" + version + " (Standalone, read-only)\n" +
            "Usage:\n"
            "  meta-sec status [--json]   Observe firewall and antivirus state\n"
+           "  meta-sec audit [--json]    Check settings against rules (PASS/FAIL/UNKNOWN)\n"
            "  meta-sec --version\n"
            "  meta-sec --help\n"
-           "Exit codes: 0 ok, 1 violation (audit, future), 2 command/engine error, "
+           "Exit codes: 0 ok, 1 audit violation, 2 command/engine error, "
            "3 incomplete observation\n";
 }
 

@@ -5,7 +5,7 @@
 
 namespace metasec {
 
-enum class Command { Help, Version, Status, Invalid };
+enum class Command { Help, Version, Status, Audit, Invalid };
 
 struct ParsedArgs {
     Command command = Command::Invalid;

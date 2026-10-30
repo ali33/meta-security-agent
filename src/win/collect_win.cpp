@@ -20,4 +20,11 @@ StatusReport collect_status(std::chrono::system_clock::time_point now) {
     return r;
 }
 
+AuditInput collect_audit_input(std::chrono::system_clock::time_point now) {
+    AuditInput in;
+    in.status = collect_status(now);
+    in.av_products = av_products_observation();
+    return in;
+}
+
 }  // namespace metasec::win
