@@ -54,6 +54,12 @@ struct Fake {
     ServiceChangeOutcome install_result{true, false, "", "created"};
     ServiceChangeOutcome uninstall_result{true, false, "", "stopped and deleted"};
     bool throw_on_change = false;
+    bool no_exposure_hook = false;
+    bool no_audit_hook = false;
+    bool audit_result = true;
+    bool audit_throws = false;
+    int audit_calls = 0;
+    std::string audit_action, audit_actor, audit_outcome;
 
     int elevated_calls = 0, query_calls = 0, ask_calls = 0, install_calls = 0, uninstall_calls = 0;
     std::string installed_path;
@@ -64,7 +70,17 @@ struct Fake {
         h.elevated = [this] { return ++elevated_calls == 1 ? elevated : elevated_after_prompt; };
         h.resolve_exe_path = [this] { return exe; };
         h.trusted_roots = [] { return kRoots; };
-        h.binary_exposure = [this](const std::string&, const std::vector<std::string>&) { return exposure; };
+        if (!no_exposure_hook)
+            h.binary_exposure = [this](const std::string&, const std::vector<std::string>&) { return exposure; };
+        if (!no_audit_hook)
+            h.record_audit = [this](const std::string& a, const std::string& who, const std::string& res) {
+                ++audit_calls;
+                audit_action = a;
+                audit_actor = who;
+                audit_outcome = res;
+                if (audit_throws) throw std::runtime_error("event log");
+                return audit_result;
+            };
         h.query_service = [this] {
             ++query_calls;
             ServiceInfo i;
@@ -229,6 +245,93 @@ void test_install_refusals_ask_nothing() {
         const auto r = run_service_change(opt(ServiceChange::Install), f.hooks());
         CHECK(r.status == ServiceChangeStatus::Incomplete && service_change_exit_code(r.status) == 3);
         CHECK(f.ask_calls == 0 && f.install_calls == 0);
+    }
+}
+
+void test_exposure_check_fails_closed() {
+    Fake f;
+    f.no_exposure_hook = true;  // a Windows layer that forgot the hook must not silently skip the look
+    const auto r = run_service_change(opt(ServiceChange::Install), f.hooks());
+    CHECK(r.status == ServiceChangeStatus::RefusedBadBinaryPath && r.path.code == "PATH_EXPOSURE_UNCHECKED");
+    CHECK(f.ask_calls == 0 && f.install_calls == 0);
+}
+
+void test_audit_record() {
+    {  // recorded: action, actor, result code; visible in the report
+        Fake f;
+        const auto r = run_service_change(opt(ServiceChange::Install), f.hooks());
+        CHECK(r.status == ServiceChangeStatus::Done && r.audit_attempted && r.audit_recorded);
+        CHECK(f.audit_calls == 1 && f.audit_action == "install" && f.audit_actor == "HOST\\alice" && f.audit_outcome == "DONE");
+        const std::string j = render_service_change_json(r, "1");
+        const auto p = json_parse(j.substr(0, j.size() - 1));
+        CHECK(p.ok && p.value.find("audit_recorded")->boolean == true && p.value.find("audit_attempted")->boolean == true);
+        CHECK(contains(render_service_change_text(r, "1"), "recorded in the Windows Event Log"));
+    }
+    {  // cannot be recorded: the outcome is NOT faked in either direction, and the gap is visible
+        for (int mode = 0; mode < 3; ++mode) {
+            Fake f;
+            f.audit_result = false;
+            f.audit_throws = mode == 1;
+            f.no_audit_hook = mode == 2;
+            const auto r = run_service_change(opt(ServiceChange::Install), f.hooks());
+            CHECK(r.status == ServiceChangeStatus::Done && service_change_exit_code(r.status) == 0);
+            CHECK(r.audit_attempted && !r.audit_recorded);
+            const std::string j = render_service_change_json(r, "1");
+            const auto p = json_parse(j.substr(0, j.size() - 1));
+            CHECK(p.ok && p.value.find("audit_recorded")->boolean == false);
+            CHECK(p.ok && contains(p.value.find("message")->string, "NOT be written"));
+            CHECK(contains(render_service_change_text(r, "1"), "NOT recorded"));
+        }
+    }
+    {  // a failed change is recorded too, with its result; a refusal or dry run records nothing
+        Fake f;
+        f.install_result = {false, false, "WIN32:5", "denied"};
+        const auto r = run_service_change(opt(ServiceChange::Install), f.hooks());
+        CHECK(r.status == ServiceChangeStatus::Failed && f.audit_calls == 1 && f.audit_outcome == "FAILED" && r.audit_recorded);
+        Fake d;
+        run_service_change(opt(ServiceChange::Install, true), d.hooks());
+        Fake n;
+        n.elevated = false;
+        run_service_change(opt(ServiceChange::Install), n.hooks());
+        Fake a;
+        a.approval = typed("no");
+        run_service_change(opt(ServiceChange::Install), a.hooks());
+        CHECK(d.audit_calls == 0 && n.audit_calls == 0 && a.audit_calls == 0);
+        Fake u;
+        u.exists = u.exists_after_prompt = true;
+        u.approval = typed("UNINSTALL SERVICE\r\n");
+        const auto ur = run_service_change(opt(ServiceChange::Uninstall), u.hooks());
+        CHECK(ur.status == ServiceChangeStatus::Done && u.audit_calls == 1 && u.audit_action == "uninstall");
+    }
+}
+
+void test_prompt_shows_what_will_change() {
+    Fake f;
+    run_service_change(opt(ServiceChange::Install), f.hooks());
+    CHECK(contains(f.last_prompt, "\"C:\\Program Files\\META\\meta-sec.exe\" service run --scm"));
+    CHECK(contains(f.last_prompt, kServiceAccountName));
+    CHECK(contains(f.last_prompt, "INSTALL SERVICE"));
+}
+
+void test_display_sanitizing() {
+    // ASCII controls, C1 controls (CSI U+009B), bidi overrides/isolates/marks are neutralized; normal UTF-8 is kept
+    CHECK(strip_unsafe_display("a\x1b[31mb") == "a?[31mb");
+    CHECK(strip_unsafe_display("x\xC2\x9B" "31m") == "x?31m");
+    CHECK(strip_unsafe_display("x\xC2\x85y") == "x?y");
+    CHECK(strip_unsafe_display("a\xE2\x80\xAE" "b") == "a?b");
+    CHECK(strip_unsafe_display("a\xE2\x80\xAA" "b\xE2\x80\xAC") == "a?b?");
+    CHECK(strip_unsafe_display("a\xE2\x81\xA6" "b\xE2\x81\xA9") == "a?b?");
+    CHECK(strip_unsafe_display("a\xE2\x80\x8E" "b\xD8\x9C") == "a?b?");
+    CHECK(strip_unsafe_display("Tu\xC3\xA2n \xE2\x80\x93 ok") == "Tu\xC3\xA2n \xE2\x80\x93 ok");  // U+00E2 and U+2013 untouched
+    Fake f;
+    f.install_result = {false, false, "E\xC2\x9B", "d\xE2\x80\xAE" "evil\xE2\x81\xA7"};
+    const auto r = run_service_change(opt(ServiceChange::Install), f.hooks());
+    const std::string t = render_service_change_text(r, "1");
+    const std::string j = render_service_change_json(r, "1");
+    for (const std::string& s : {t, j}) {
+        CHECK(s.find("\xC2\x9B") == std::string::npos);
+        CHECK(s.find("\xE2\x80\xAE") == std::string::npos);
+        CHECK(s.find("\xE2\x81\xA7") == std::string::npos);
     }
 }
 
@@ -452,6 +555,10 @@ int main() {
     test_exit_codes_and_names();
     test_install_happy_path();
     test_install_refusals_ask_nothing();
+    test_exposure_check_fails_closed();
+    test_audit_record();
+    test_prompt_shows_what_will_change();
+    test_display_sanitizing();
     test_dry_run();
     test_approval_refusals();
     test_recheck_after_prompt();

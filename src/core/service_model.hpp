@@ -31,6 +31,9 @@ inline constexpr const char* kServiceInstallPhrase = "INSTALL SERVICE";
 inline constexpr const char* kServiceUninstallPhrase = "UNINSTALL SERVICE";
 // Prompt shown before asking. `install` selects install vs uninstall wording.
 std::string service_approval_prompt_text(bool install, const std::string& actor, bool elevated);
+// Same, also showing what will be registered / removed: the full ImagePath and the account (empty = omitted).
+std::string service_approval_prompt_text(bool install, const std::string& actor, bool elevated, const std::string& image_path,
+                                         const std::string& account);
 
 enum class InstallState { NotInstalled, Installed };
 enum class RunState { Stopped, StartPending, Running, StopPending, ContinuePending, PausePending, Paused, Unknown };
@@ -104,6 +107,11 @@ struct ServiceEventsReport {
 int service_events_exit_code(const ServiceEventsReport& r);
 std::string render_service_events_json(const ServiceEventsReport& r, const std::string& version);
 std::string render_service_events_text(const ServiceEventsReport& r, const std::string& version);
+
+// Terminal-safe text: ASCII controls, C1 controls (U+0080..9F, e.g. the CSI U+009B) and bidirectional
+// override/isolate/mark characters (U+202A..E, U+2066..9, U+200E/F, U+061C) become '?', so untrusted text
+// can neither drive the terminal nor visually reorder a report line.
+std::string strip_unsafe_display(std::string_view s);
 
 // Pure helper: user-profile segment redacted, control characters removed, length capped.
 std::string redact_binary_path(const std::string& path);

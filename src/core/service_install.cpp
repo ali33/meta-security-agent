@@ -13,14 +13,7 @@ namespace {
 
 std::string q(std::string_view s) { return "\"" + json_escape(s) + "\""; }
 
-std::string printable(std::string_view s) {
-    std::string o;
-    for (char c : s) {
-        const unsigned char u = static_cast<unsigned char>(c);
-        o += (u < 0x20 || u == 0x7F) ? '?' : c;
-    }
-    return o;
-}
+std::string printable(std::string_view s) { return strip_unsafe_display(s); }
 
 std::string clip(std::string_view s, std::size_t n) {
     std::string o = printable(s);
@@ -160,7 +153,10 @@ namespace {
 BinaryPathCheck full_path_check(const ServiceChangeHooks& h, const std::string& path) {
     const std::vector<std::string> roots = h.trusted_roots();
     BinaryPathCheck c = evaluate_service_binary_path(path, roots);
-    if (c.allowed && h.binary_exposure) {
+    if (c.allowed && !h.binary_exposure) {
+        // Fail closed: without the exposure look the location is not proven safe.
+        c = refuse("PATH_EXPOSURE_UNCHECKED", "the access rules of the binary's location could not be verified");
+    } else if (c.allowed) {
         const std::string why = h.binary_exposure(path, roots);
         if (!why.empty())
             c = refuse("PATH_WRITABLE_BY_NON_ADMINS",
@@ -197,11 +193,12 @@ ServiceChangeReport run_service_change(const ServiceChangeOptions& opt, const Se
     if (install && !rep.path.allowed) return finish(ServiceChangeStatus::RefusedBadBinaryPath);
 
     // Gate 3: current state of the service.
+    ServiceInfo seen;
     auto observe = [&]() {
-        const ServiceInfo info = h.query_service();
-        rep.service_query_ok = info.query_ok;
-        rep.service_exists = info.query_ok && info.install == InstallState::Installed;
-        return info.query_ok;
+        seen = h.query_service();
+        rep.service_query_ok = seen.query_ok;
+        rep.service_exists = seen.query_ok && seen.install == InstallState::Installed;
+        return seen.query_ok;
     };
     if (!observe()) return finish(ServiceChangeStatus::Incomplete);
     if (install && rep.service_exists) return finish(ServiceChangeStatus::RefusedAlreadyInstalled);
@@ -212,8 +209,11 @@ ServiceChangeReport run_service_change(const ServiceChangeOptions& opt, const Se
 
     // Gate 4: typed approval on a real console.
     rep.approval_asked = true;
-    rep.approval = evaluate_approval(h.ask_approval(service_approval_prompt_text(install, rep.actor, rep.elevated)),
-                                     install ? kServiceInstallPhrase : kServiceUninstallPhrase);
+    const std::string shown_image = install ? build_service_image_path(rep.binary_path) : seen.binary_path;
+    const std::string shown_account = install ? std::string(kServiceAccountName) : seen.account;
+    rep.approval = evaluate_approval(
+        h.ask_approval(service_approval_prompt_text(install, rep.actor, rep.elevated, shown_image, shown_account)),
+        install ? kServiceInstallPhrase : kServiceUninstallPhrase);
     if (!rep.approval.approved) return finish(ServiceChangeStatus::RefusedNotApproved);
     rep.approved_at_utc = h.now_utc();
 
@@ -236,13 +236,21 @@ ServiceChangeReport run_service_change(const ServiceChangeOptions& opt, const Se
         rep.outcome.error_code = "EXCEPTION";
         rep.outcome.detail = e.what();
     }
-    if (rep.outcome.ok) return finish(ServiceChangeStatus::Done);
-    return finish(rep.outcome.incomplete ? ServiceChangeStatus::Incomplete : ServiceChangeStatus::Failed);
+    const ServiceChangeStatus result = rep.outcome.ok ? ServiceChangeStatus::Done
+                                       : rep.outcome.incomplete ? ServiceChangeStatus::Incomplete
+                                                                : ServiceChangeStatus::Failed;
+    rep.audit_attempted = true;
+    try {
+        rep.audit_recorded = h.record_audit && h.record_audit(install ? "install" : "uninstall", rep.actor, to_string(result));
+    } catch (...) {
+        rep.audit_recorded = false;
+    }
+    return finish(result);
 }
 
 namespace {
 
-std::string status_message(const ServiceChangeReport& r) {
+std::string status_message_core(const ServiceChangeReport& r) {
     const bool install = r.change == ServiceChange::Install;
     switch (r.status) {
         case ServiceChangeStatus::DryRunWouldProceed:
@@ -273,6 +281,13 @@ std::string status_message(const ServiceChangeReport& r) {
     return {};
 }
 
+std::string status_message(const ServiceChangeReport& r) {
+    std::string m = status_message_core(r);
+    if (r.audit_attempted && !r.audit_recorded)
+        m += " WARNING: this action could NOT be written to the Windows Event Log (no persistent record was made).";
+    return m;
+}
+
 }  // namespace
 
 std::string render_service_change_json(const ServiceChangeReport& r, const std::string& version) {
@@ -293,8 +308,10 @@ std::string render_service_change_json(const ServiceChangeReport& r, const std::
                      R"("reason":{},"actor":{},"approved_at_utc":{}}},)",
                      b(r.approval_asked), b(r.approval.approved), q(r.approval_asked ? r.approval.reason : ""),
                      q(clip(r.actor, 120)), q(r.approved_at_utc));
-    o += std::format(R"("change":{{"attempted":{},"ok":{},"error_code":{},"detail":{}}}}})", b(r.change_attempted),
+    o += std::format(R"("change":{{"attempted":{},"ok":{},"error_code":{},"detail":{}}},)", b(r.change_attempted),
                      b(r.outcome.ok), q(clip(r.outcome.error_code, 40)), q(clip(r.outcome.detail, 200)));
+    o += std::format(R"("audit_attempted":{},"audit_recorded":{},"audit_sink":"windows_event_log"}})", b(r.audit_attempted),
+                     b(r.audit_recorded));
     return o + "\n";
 }
 
@@ -313,6 +330,9 @@ std::string render_service_change_text(const ServiceChangeReport& r, const std::
     if (r.approval_asked)
         o += std::format("Approval    : {} ({}), account {}\n", r.approval.approved ? "granted" : "not granted",
                          r.approval.reason, clip(r.actor, 120));
+    if (r.audit_attempted)
+        o += std::format("Audit log   : {}\n", r.audit_recorded ? "recorded in the Windows Event Log (Application, source MetaSecAgent)"
+                                                              : "NOT recorded (Windows Event Log write failed)");
     o += std::format("Result      : {} (exit {})\n", to_string(r.status), service_change_exit_code(r.status));
     o += status_message(r) + "\n";
     return o;

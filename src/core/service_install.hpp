@@ -25,6 +25,9 @@ namespace metasec {
 
 enum class ServiceChange { Install, Uninstall };
 
+// Account the service runs as (shown in the approval prompt; the Windows layer configures the same).
+inline constexpr const char* kServiceAccountName = "NT AUTHORITY\\LocalService";
+
 // ---- Binary path policy (pure) ---------------------------------------------------------------
 // A service runs with its account's rights, so the registered binary must be in a place a
 // non-administrator cannot write; otherwise "install" would hand SYSTEM-class code execution to
@@ -83,6 +86,11 @@ struct ServiceChangeHooks {
     std::function<ApprovalInput(const std::string& prompt)> ask_approval;  // MUST NOT prompt unless stdin is a console
     std::function<std::string()> actor;
     std::function<std::string()> now_utc;
+    // Best effort, called once after the side effect was attempted (whatever its outcome): writes one persistent
+    // record (action, actor, result code) and returns whether it was recorded. Never decides anything; a missing
+    // hook or a false/throwing result is shown in the report (audit_recorded=false), it never turns a failure
+    // into success or the other way round.
+    std::function<bool(const std::string& action, const std::string& actor, const std::string& result)> record_audit;
     // THE side effects. Never called unless every gate above passed.
     std::function<ServiceChangeOutcome(const std::string& exe_path)> install;
     std::function<ServiceChangeOutcome()> uninstall;
@@ -105,6 +113,8 @@ struct ServiceChangeReport {
     std::string approved_at_utc;
     bool change_attempted = false;
     ServiceChangeOutcome outcome;
+    bool audit_attempted = false;
+    bool audit_recorded = false;  // the persistent record (Windows Event Log) was written
 };
 
 ServiceChangeReport run_service_change(const ServiceChangeOptions& opt, const ServiceChangeHooks& hooks);

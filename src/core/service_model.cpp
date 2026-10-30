@@ -14,14 +14,7 @@ namespace {
 std::string q(std::string_view s) { return "\"" + json_escape(s) + "\""; }
 
 // Terminal-safe: control characters never reach the console.
-std::string printable(std::string_view s) {
-    std::string o;
-    for (char c : s) {
-        const unsigned char u = static_cast<unsigned char>(c);
-        o += (u < 0x20 || u == 0x7F) ? '?' : c;
-    }
-    return o;
-}
+std::string printable(std::string_view s) { return strip_unsafe_display(s); }
 
 std::string clip(std::string_view s, std::size_t n) {
     std::string o = printable(s);
@@ -50,6 +43,34 @@ std::string tag_of(const std::string& kind) {
 std::string state_or_absent(const std::string& s) { return s.empty() ? "(absent)" : clip(s, 32); }
 
 }  // namespace
+
+std::string strip_unsafe_display(std::string_view s) {
+    std::string o;
+    for (std::size_t i = 0; i < s.size();) {
+        const unsigned char c = static_cast<unsigned char>(s[i]);
+        auto at = [&](std::size_t k) { return i + k < s.size() ? static_cast<unsigned char>(s[i + k]) : 0; };
+        if (c < 0x20 || c == 0x7F) {  // ASCII controls (ESC, CR, LF, NUL...)
+            o += '?';
+            ++i;
+        } else if (c == 0xC2 && at(1) >= 0x80 && at(1) <= 0x9F) {  // C1 controls (U+0080..U+009F, includes CSI U+009B)
+            o += '?';
+            i += 2;
+        } else if (c == 0xD8 && at(1) == 0x9C) {  // U+061C arabic letter mark
+            o += '?';
+            i += 2;
+        } else if (c == 0xE2 && at(1) == 0x80 && (at(2) == 0x8E || at(2) == 0x8F || (at(2) >= 0xAA && at(2) <= 0xAE))) {
+            o += '?';  // U+200E/F marks, U+202A..U+202E embeddings and overrides
+            i += 3;
+        } else if (c == 0xE2 && at(1) == 0x81 && at(2) >= 0xA6 && at(2) <= 0xA9) {  // U+2066..U+2069 isolates
+            o += '?';
+            i += 3;
+        } else {
+            o += s[i];
+            ++i;
+        }
+    }
+    return o;
+}
 
 const char* to_string(InstallState s) { return s == InstallState::Installed ? "INSTALLED" : "NOT_INSTALLED"; }
 
@@ -125,6 +146,11 @@ std::string redact_binary_path(const std::string& path) {
 }
 
 std::string service_approval_prompt_text(bool install, const std::string& actor, bool elevated) {
+    return service_approval_prompt_text(install, actor, elevated, {}, {});
+}
+
+std::string service_approval_prompt_text(bool install, const std::string& actor, bool elevated, const std::string& image_path,
+                                         const std::string& account) {
     std::string o;
     if (install) {
         o += std::format("About to INSTALL the Windows service '{}' (a background observer).\n", kServiceName);
@@ -134,6 +160,8 @@ std::string service_approval_prompt_text(bool install, const std::string& actor,
         o += std::format("About to UNINSTALL the Windows service '{}'.\n", kServiceName);
         o += "  Effect        : stops and removes the service registration. Stored events are left on disk.\n";
     }
+    if (!image_path.empty()) o += std::format("  Command line  : {}\n", clip(image_path, 300));
+    if (!account.empty()) o += std::format("  Runs as       : {}\n", clip(account, 120));
     o += std::format("  Approving as  : {}\n", printable(actor));
     if (!elevated) o += "  Note          : this process is not elevated; Windows will probably deny the request.\n";
     o += std::format("To approve, type exactly  {}  and press Enter. Anything else cancels.\n> ",
