@@ -1,8 +1,68 @@
 #include "cli.hpp"
 
 #include "render.hpp"
+#include "watch.hpp"
 
 namespace metasec {
+
+namespace {
+
+// Strict decimal integer in [lo, hi]: digits only, no sign, no spaces, at most 9 digits.
+bool parse_int_in(std::string_view s, int lo, int hi, int& out) {
+    if (s.empty() || s.size() > 9) return false;
+    long v = 0;
+    for (char c : s) {
+        if (c < '0' || c > '9') return false;
+        v = v * 10 + (c - '0');
+    }
+    if (v < lo || v > hi) return false;
+    out = static_cast<int>(v);
+    return true;
+}
+
+ParsedArgs parse_watch(const std::vector<std::string_view>& args) {
+    ParsedArgs p;
+    p.interval_seconds = kDefaultIntervalSeconds;
+    p.confirm_polls = kDefaultConfirmPolls;
+    bool seen_interval = false, seen_max = false, seen_confirm = false;
+    auto value_flag = [&](std::size_t& i, bool& seen, int lo, int hi, int& dst) {
+        const std::string name = sanitize_for_display(args[i]);
+        if (seen) {
+            p.error = "duplicate argument: " + name;
+            return false;
+        }
+        if (i + 1 >= args.size()) {
+            p.error = name + " needs a value";
+            return false;
+        }
+        if (!parse_int_in(args[i + 1], lo, hi, dst)) {
+            p.error = name + " must be an integer from " + std::to_string(lo) + " to " + std::to_string(hi) +
+                      ", got: " + sanitize_for_display(args[i + 1]);
+            return false;
+        }
+        seen = true;
+        ++i;
+        return true;
+    };
+    for (std::size_t i = 1; i < args.size(); ++i) {
+        if (args[i] == "--json" && !p.json) {
+            p.json = true;
+        } else if (args[i] == "--interval") {
+            if (!value_flag(i, seen_interval, kMinIntervalSeconds, kMaxIntervalSeconds, p.interval_seconds)) return p;
+        } else if (args[i] == "--max-polls") {
+            if (!value_flag(i, seen_max, 1, kMaxPollsLimit, p.max_polls)) return p;
+        } else if (args[i] == "--confirm") {
+            if (!value_flag(i, seen_confirm, kMinConfirmPolls, kMaxConfirmPolls, p.confirm_polls)) return p;
+        } else {
+            p.error = "unexpected argument: " + sanitize_for_display(args[i]);
+            return p;
+        }
+    }
+    p.command = Command::Watch;
+    return p;
+}
+
+}  // namespace
 
 ParsedArgs parse_args(const std::vector<std::string_view>& args) {
     ParsedArgs p;
@@ -39,6 +99,7 @@ ParsedArgs parse_args(const std::vector<std::string_view>& args) {
         p.command = cmd == "audit" ? Command::Audit : Command::Status;
         return p;
     }
+    if (cmd == "watch") return parse_watch(args);
     p.error = "unknown command: " + sanitize_for_display(cmd);
     return p;
 }
@@ -48,10 +109,12 @@ std::string usage_text(const std::string& version) {
            "Usage:\n"
            "  meta-sec status [--json]   Observe firewall and antivirus state\n"
            "  meta-sec audit [--json]    Check settings against rules (PASS/FAIL/UNKNOWN)\n"
+           "  meta-sec watch [--json] [--interval S] [--max-polls N] [--confirm N]\n"
+           "                             Report status changes until Ctrl+C (--json: one JSON per line)\n"
            "  meta-sec --version\n"
            "  meta-sec --help\n"
            "Exit codes: 0 ok, 1 audit violation, 2 command/engine error, "
-           "3 incomplete observation\n";
+           "3 incomplete observation (watch: judged on the last poll)\n";
 }
 
 std::string sanitize_for_display(std::string_view s) {
