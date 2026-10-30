@@ -40,6 +40,8 @@ struct DefenderRaw {
 };
 
 // Two checks (antivirus, realtime_protection). Decision order:
+//  0. AMRunningMode present but not an allowlisted value (including "" and "normal"):
+//     UNKNOWN with error_code UNRECOGNIZED_RUNNING_MODE:<sanitized>; flags are not used.
 //  1. AMRunningMode present and not "Normal": Defender is not the primary engine.
 //     - "Not running" while WSC reports GOOD  -> PASSIVE (another AV is healthy)
 //     - "Not running" otherwise               -> DISABLED

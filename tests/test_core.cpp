@@ -148,6 +148,11 @@ void test_interpret() {
         const auto r = interpret_firewall_profile(kIdFwPublic, now, static_cast<std::int32_t>(0x80070005u), true);
         CHECK(r.state == State::Unknown && r.error_code == "HRESULT:0x80070005");
     }
+    {
+        // API absent => NOT_SUPPORTED, distinct from a transient failure
+        const auto r = interpret_firewall_profile(kIdFwPublic, now, static_cast<std::int32_t>(0x80004001u), true);
+        CHECK(r.state == State::NotSupported && is_incomplete(r.state));
+    }
     CHECK(interpret_wsc(now, 0, 0).state == State::Good);
     CHECK(interpret_wsc(now, 0, 2).state == State::Poor);
     CHECK(interpret_wsc(now, static_cast<std::int32_t>(0x80004001u), 0).state == State::NotSupported);
@@ -206,6 +211,24 @@ void test_interpret() {
     nrm.running_mode = "Not running";
     d = interpret_defender(nrm, State::Good, now);
     CHECK(find(d, kIdDefenderAv)->state == State::Passive && find(d, kIdDefenderAv)->error_code.empty());
+
+    // unrecognized / empty / wrong-case mode: fail closed to UNKNOWN even if flags say enabled
+    for (const char* bad : {"", "normal", "NORMAL", "Normal ", "Active", "Passive"}) {
+        DefenderRaw u;
+        u.running_mode = bad;
+        u.antivirus_enabled = true;
+        u.realtime_enabled = true;
+        d = interpret_defender(u, State::Good, now);
+        CHECK(d[0].state == State::Unknown && d[1].state == State::Unknown);
+        CHECK(d[0].error_code.rfind("UNRECOGNIZED_RUNNING_MODE:", 0) == 0);
+        CHECK(d[0].error_code.find('') == std::string::npos);
+    }
+    for (const char* ok : {"Passive", "Passive mode", "EDR Block Mode"}) {
+        DefenderRaw u;
+        u.running_mode = ok;
+        u.antivirus_enabled = true;
+        CHECK(interpret_defender(u, State::Poor, now)[0].state == State::Passive);
+    }
 
     // no mode at all and no flags: UNKNOWN
     d = interpret_defender(DefenderRaw{}, State::Good, now);

@@ -28,7 +28,7 @@ Exit codes today: `0` observation complete (`OBSERVED` or `OBSERVED_WITH_ISSUES`
 - `posture` (additive, per check): `OK` (ENABLED, GOOD), `ATTENTION` (DISABLED, POOR, SNOOZE, NOT_MONITORED), `NOT_APPLICABLE` (PASSIVE), `UNKNOWN` (UNKNOWN, NOT_SUPPORTED). A disabled setting is observed, but it is never presented as fine.
 - `attention` (additive, top level): `check_id`s whose posture is `ATTENTION`; `[]` when none.
 - `overall`: `INCOMPLETE` if any check is UNKNOWN, NOT_SUPPORTED or NOT_MONITORED (exit 3); else `OBSERVED_WITH_ISSUES` if `attention` is non-empty; else `OBSERVED`. Both OBSERVED values exit 0: `status` observes, it does not judge. Exit 1 is reserved for `audit` (MVP-1). Consumers must read `attention`/`posture`, not just the exit code.
-- A timed-out WMI query is reported as `UNKNOWN` with `error_code` `TIMEOUT`; an empty result as `NO_INSTANCE`.
+- Non-HRESULT `error_code` values: `TIMEOUT` (WMI query timed out), `NO_INSTANCE` (query returned nothing), `PROPERTY_UNAVAILABLE:<prop>` (property missing or wrong type), `UNRECOGNIZED_RUNNING_MODE:<sanitized value>` (Defender `AMRunningMode` is empty or not one of Normal, Passive, Passive mode, SxS Passive Mode, EDR Block Mode, Not running; matching is case-sensitive and fails closed to `UNKNOWN`). All of them come with state `UNKNOWN`.
 
 Future:
 ```text
