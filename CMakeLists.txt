@@ -31,7 +31,11 @@ if(MSVC)
 endif()
 
 # Local event store (SQLite). Still free of Windows headers.
-add_library(metasec_store STATIC src/core/store.cpp src/core/observer.cpp)
+add_library(metasec_store STATIC
+  src/core/store.cpp
+  src/core/observer.cpp
+  src/core/ipc_proto.cpp
+  src/core/service_model.cpp)
 target_link_libraries(metasec_store PUBLIC metasec_core PRIVATE sqlite3_vendor)
 
 # Windows providers (firewall, Security Center, Defender via WMI).
@@ -43,7 +47,7 @@ add_library(metasec_win STATIC
   src/win/av_products_win.cpp
   src/win/scan_win.cpp
   src/win/collect_win.cpp)
-target_link_libraries(metasec_win PUBLIC metasec_core ole32 oleaut32 wbemuuid secur32)
+target_link_libraries(metasec_win PUBLIC metasec_core metasec_store ole32 oleaut32 wbemuuid secur32)
 
 add_executable(meta-sec src/main.cpp)
 target_link_libraries(meta-sec PRIVATE metasec_win)
@@ -118,12 +122,20 @@ if(BUILD_TESTING)
   endif()
   add_test(NAME observer_unit COMMAND metasec_observer_tests)
 
+  add_executable(metasec_service_tests tests/test_service.cpp)
+  target_link_libraries(metasec_service_tests PRIVATE metasec_store)
+  target_compile_definitions(metasec_service_tests PRIVATE NOMINMAX)
+  if(MSVC)
+    target_compile_options(metasec_service_tests PRIVATE /W4 /WX /EHsc /utf-8 /permissive-)
+  endif()
+  add_test(NAME service_unit COMMAND metasec_service_tests)
+
   add_test(NAME json_roundtrip
     COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:metasec_tests>
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/json_roundtrip.cmake)
 
   # End-to-end tests drive the real executable; JSON validity is checked by CMake's own parser.
-  foreach(mode help version status_text status_json audit_text audit_json audit_bad_flag watch_text watch_json watch_bad_args scan_dry_run scan_json scan_no_approval scan_bad_args bad_command bad_flag no_args)
+  foreach(mode help version status_text status_json audit_text audit_json audit_bad_flag watch_text watch_json watch_bad_args scan_dry_run scan_json scan_no_approval scan_bad_args service_bad_args bad_command bad_flag no_args)
     add_test(NAME cli_${mode}
       COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:meta-sec> -DMODE=${mode}
               -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_check.cmake)
