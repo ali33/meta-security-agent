@@ -14,8 +14,13 @@
 #include "core/cli.hpp"
 #include "core/render.hpp"
 #include "core/scan.hpp"
+#include "core/service_install.hpp"
+#include "core/service_model.hpp"
 #include "core/watch.hpp"
 #include "win/collect.hpp"
+#include "win/ipc_win.hpp"
+#include "win/scm_win.hpp"
+#include "win/service_win.hpp"
 
 #ifndef META_SEC_VERSION
 #define META_SEC_VERSION "0.0.0"
@@ -224,6 +229,83 @@ int run_scan_command(const metasec::ParsedArgs& parsed, const std::string& versi
     return scan_exit_code(report.status);
 }
 
+// ---- service (MVP-4) ----------------------------------------------------------------------------
+
+metasec::win::IpcClientOptions ipc_options(const metasec::ParsedArgs& parsed, DWORD service_pid) {
+    metasec::win::IpcClientOptions o;
+    o.pipe_name = parsed.pipe_name;
+    // Default pipe: the server must be the process the SCM reports for the service (a user process that
+    // squatted the name is not). An explicit --pipe-name is a foreground/test setup: no such check.
+    if (parsed.pipe_name.empty())
+        o.verify_server = [service_pid](DWORD pid) { return service_pid != 0 && pid == service_pid; };
+    return o;
+}
+
+int run_service_status(const metasec::ParsedArgs& parsed, const std::string& version) {
+    using namespace metasec;
+    DWORD pid = 0;
+    const ServiceInfo info = win::query_service_info(&pid);
+    IpcSnapshot ipc;
+    const bool explicit_pipe = !parsed.pipe_name.empty();
+    if (info.query_ok && info.install == InstallState::Installed && info.run == RunState::Running)
+        ipc = win::ipc_fetch_status(ipc_options(parsed, pid));
+    else if (explicit_pipe && info.query_ok)
+        ipc = win::ipc_fetch_status(ipc_options(parsed, pid));
+    const ServiceStatusReport report = build_service_status_report(format_utc(std::chrono::system_clock::now()), info, ipc);
+    const std::string out = parsed.json ? render_service_status_json(report, version) : render_service_status_text(report, version);
+    if (!write_stdout(out)) {
+        std::cerr << "meta-sec: failed to write output\n";
+        return kExitError;
+    }
+    return report.exit_code;
+}
+
+int run_service_events(const metasec::ParsedArgs& parsed, const std::string& version) {
+    using namespace metasec;
+    DWORD pid = 0;
+    if (parsed.pipe_name.empty()) win::query_service_info(&pid);
+    const ServiceEventsReport report =
+        win::ipc_fetch_events(ipc_options(parsed, pid), parsed.limit, format_utc(std::chrono::system_clock::now()));
+    const std::string out = parsed.json ? render_service_events_json(report, version) : render_service_events_text(report, version);
+    if (!write_stdout(out)) {
+        std::cerr << "meta-sec: failed to write output\n";
+        return kExitError;
+    }
+    return service_events_exit_code(report);
+}
+
+int run_service_change_command(const metasec::ParsedArgs& parsed, const std::string& version) {
+    using namespace metasec;
+    ServiceChangeOptions opt;
+    opt.change = parsed.service == ServiceCommand::Install ? ServiceChange::Install : ServiceChange::Uninstall;
+    opt.dry_run = parsed.dry_run;
+    const ServiceChangeReport report = run_service_change(opt, win::real_service_change_hooks());
+    const std::string out = parsed.json ? render_service_change_json(report, version) : render_service_change_text(report, version);
+    if (!write_stdout(out)) {
+        std::cerr << "meta-sec: failed to write output\n";
+        return kExitError;
+    }
+    return service_change_exit_code(report.status);
+}
+
+int run_service_command(const metasec::ParsedArgs& parsed, const std::string& version) {
+    using namespace metasec;
+    switch (parsed.service) {
+        case ServiceCommand::Status: return run_service_status(parsed, version);
+        case ServiceCommand::Events: return run_service_events(parsed, version);
+        case ServiceCommand::Install:
+        case ServiceCommand::Uninstall: return run_service_change_command(parsed, version);
+        case ServiceCommand::Run:
+            if (!win::harden_dll_search()) {
+                std::cerr << "meta-sec: cannot restrict the DLL search path\n";
+                return kExitError;
+            }
+            return parsed.scm ? win::run_service_scm(version) : win::run_service_console(parsed, version);
+        case ServiceCommand::None: break;
+    }
+    return kExitError;
+}
+
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
@@ -256,9 +338,7 @@ int wmain(int argc, wchar_t** argv) {
             case Command::Scan:
                 return run_scan_command(parsed, version);
             case Command::Service:
-                // Placeholder until the Windows half (SCM, pipe, ACL) is wired in.
-                std::cerr << "meta-sec: service commands are not available in this build yet\n";
-                return kExitError;
+                return run_service_command(parsed, version);
         }
         return kExitError;
     } catch (const std::exception& e) {

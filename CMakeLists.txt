@@ -47,8 +47,12 @@ add_library(metasec_win STATIC
   src/win/defender_win.cpp
   src/win/av_products_win.cpp
   src/win/scan_win.cpp
-  src/win/collect_win.cpp)
-target_link_libraries(metasec_win PUBLIC metasec_core metasec_store ole32 oleaut32 wbemuuid secur32)
+  src/win/collect_win.cpp
+  src/win/datadir_win.cpp
+  src/win/ipc_win.cpp
+  src/win/scm_win.cpp
+  src/win/service_win.cpp)
+target_link_libraries(metasec_win PUBLIC metasec_core metasec_store ole32 oleaut32 wbemuuid secur32 advapi32 shell32 bcrypt)
 
 add_executable(meta-sec src/main.cpp)
 target_link_libraries(meta-sec PRIVATE metasec_win)
@@ -139,12 +143,23 @@ if(BUILD_TESTING)
   endif()
   add_test(NAME service_install_unit COMMAND metasec_service_install_tests)
 
+  # Windows integration: real named pipe + real SQLite in a temp dir + fake snapshots. No SCM, no admin.
+  add_executable(metasec_service_win_tests tests/test_service_win.cpp)
+  target_link_libraries(metasec_service_win_tests PRIVATE metasec_win)
+  target_compile_definitions(metasec_service_win_tests PRIVATE NOMINMAX UNICODE _UNICODE WIN32_LEAN_AND_MEAN)
+  target_include_directories(metasec_service_win_tests PRIVATE tests src)
+  if(MSVC)
+    target_compile_options(metasec_service_win_tests PRIVATE /W4 /WX /EHsc /utf-8 /permissive-)
+  endif()
+  add_test(NAME service_win_integration COMMAND metasec_service_win_tests)
+  set_tests_properties(service_win_integration PROPERTIES TIMEOUT 180)
+
   add_test(NAME json_roundtrip
     COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:metasec_tests>
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/json_roundtrip.cmake)
 
   # End-to-end tests drive the real executable; JSON validity is checked by CMake's own parser.
-  foreach(mode help version status_text status_json audit_text audit_json audit_bad_flag watch_text watch_json watch_bad_args scan_dry_run scan_json scan_no_approval scan_bad_args service_bad_args bad_command bad_flag no_args)
+  foreach(mode help version status_text status_json audit_text audit_json audit_bad_flag watch_text watch_json watch_bad_args scan_dry_run scan_json scan_no_approval scan_bad_args service_bad_args service_status service_status_json service_events service_install_dry_run service_install_no_approval service_uninstall service_run_console service_run_bad_args bad_command bad_flag no_args)
     add_test(NAME cli_${mode}
       COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:meta-sec> -DMODE=${mode}
               -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_check.cmake)
