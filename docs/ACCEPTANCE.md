@@ -34,8 +34,8 @@ Boxes above stay unchecked until a human accepts. Evidence so far, details in [e
 | `--help` | PASS (exit 0) |
 | Real hostname and firewall profiles | PASS, matches `Get-NetFirewallProfile` on one machine |
 | `status --json` valid JSON, clean stdout | PASS (checked by CMake's JSON parser in CTest) |
-| WSC not presented as Defender state | PASS, separate checks; on the lab machine WSC=GOOD while Defender=DISABLED |
-| Unknown / unsupported reported explicitly | PASS in unit tests; not observed on a real OS |
+| WSC not presented as Defender state | PASS, separate checks; on the lab machine WSC=GOOD while Defender is PASSIVE (not running, another AV healthy) |
+| Unknown / unsupported / attention reported explicitly | PASS in unit tests (156 checks, fakes for every provider decision); not observed on a real OS |
 | Non-admin run, invalid arguments | PASS (non-admin session; bad args exit 2 on stderr) |
 | Elevated run, Windows Server, second machine | NOT TESTED |
 | No network/db, no setting changes | by design (read-only COM/WMI queries); no network code |
