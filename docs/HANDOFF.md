@@ -122,6 +122,8 @@ Exit codes: 0 successful read with no known violation; 1 confirmed policy violat
 
 Suggested JSON `schema_version: 1` fields: `product, version, mode, hostname, observed_at_utc, checks[], overall`. Each check has `name, state, source, error` initially; evolve additively with `evidence`, timestamps and rule IDs.
 
+Implemented additive changes to schema_version 1 (MVP-0): per-check `check_id`, `observed_at_utc`, `posture` (`OK|ATTENTION|UNKNOWN|NOT_APPLICABLE`), `error_code`, `evidence{}`; top-level `version`, `platform{}`, `attention[]`; new state `PASSIVE`; `overall` may be `OBSERVED_WITH_ISSUES`. `status` exits 0 for both OBSERVED values (it observes; only `audit` returns 1), so a disabled firewall/Defender or poor WSC shows in `attention[]`/`posture`, not in the exit code. See docs/CLI.md.
+
 ## H. Security baseline: hard release blockers
 
 - All data gathering read-only unless a separately approved action demands otherwise.
