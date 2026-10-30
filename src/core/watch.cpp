@@ -189,6 +189,13 @@ std::vector<WatchEvent> WatchTracker::observe(const StatusReport& r) {
     return events;
 }
 
+std::vector<std::pair<std::string, State>> WatchTracker::confirmed_states() const {
+    std::vector<std::pair<std::string, State>> out;
+    for (const auto& e : entries_)
+        if (e.confirmed) out.emplace_back(e.id, *e.confirmed);
+    return out;
+}
+
 // --- rendering --------------------------------------------------------------------------------
 
 std::string render_watch_baseline_json(const StatusReport& r, const WatchOptions& opt, const std::string& version) {
