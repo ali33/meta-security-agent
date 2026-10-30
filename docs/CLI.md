@@ -1,6 +1,6 @@
 # CLI contract
 
-Current implementation (MVP-0 status, MVP-1 audit, MVP-2 watch):
+Current implementation (MVP-0 status, MVP-1 audit, MVP-2 watch, MVP-3 scan):
 ```powershell
 meta-sec.exe --help
 meta-sec.exe --version
@@ -8,6 +8,7 @@ meta-sec.exe status
 meta-sec.exe status --json
 meta-sec.exe audit [--json]
 meta-sec.exe watch [--json] [--interval S] [--max-polls N] [--confirm N]
+meta-sec.exe scan --quick [--dry-run] [--json]
 ```
 
 Exit codes today: `0` observation complete (`OBSERVED` or `OBSERVED_WITH_ISSUES`), `2` bad arguments or engine failure (diagnostic on stderr, nothing on stdout), `3` incomplete observation (`INCOMPLETE`). `status` never returns 1; `1` is returned by `audit` for a confirmed FAIL (see below).
@@ -112,9 +113,38 @@ Common fields: `schema_version`, `command`, `event`, `observed_at_utc`.
 ```
 Text mode prints the same information one line per event (`<utc> [CHANGE] firewall.public: ENABLED -> DISABLED (ATTENTION)`).
 
+## `scan --quick` (MVP-3)
+
+```powershell
+meta-sec.exe scan --quick --dry-run     # evaluate the gate, print the plan, start nothing
+meta-sec.exe scan --quick               # gate, then typed approval, then ONE Defender quick scan
+meta-sec.exe scan --quick --json        # one JSON document on stdout; the prompt still goes to stderr
+```
+
+The only side effect in the product. It is limited to a single **quick** scan through the supported Defender management interface (WMI `ROOT\Microsoft\Windows\Defender`, class `MSFT_MpScan`, static method `Start`, `ScanType` = 1), no PowerShell. There is no `--full`, no custom path, no remediation, quarantine or setting change. `--quick` is mandatory; any other or repeated argument exits 2.
+
+**Order of events (fixed, tested with fakes):** read Defender state -> **gate** -> (`--dry-run` stops here) -> **approval** -> read Defender state again and re-apply the gate -> `Start` -> read Defender timestamps again to confirm. `Start` is never reached unless both the gate and the approval passed.
+
+**Gate (fail closed).** Allowed only when `MSFT_MpComputerStatus` was read AND `AMRunningMode` is exactly `Normal` (case-sensitive). Everything else is refused with a code and a human message: `DEFENDER_NOT_SUPPORTED` (no Defender namespace, e.g. Server Core without the feature), `DEFENDER_UNAVAILABLE` (query failed or timed out), `MODE_MISSING`, `MODE_PASSIVE` (`Passive`, `Passive mode`, `SxS Passive Mode`, `EDR Block Mode`), `MODE_NOT_RUNNING` (`Not running`), `MODE_UNRECOGNIZED`. The message names the antivirus products Security Center reports as ON and tells the user to run a scan in that product: Windows has no common interface to command a third-party antivirus, so this tool does not pretend to.
+
+**Approval.** The human must type exactly `START QUICK SCAN` (case-sensitive, nothing else on the line) and press Enter at a prompt shown on stderr. Required: stdin is a real console input handle (`GetConsoleMode` succeeds) and stderr is a real console, so a person can see the prompt; otherwise refused as `NOT_A_CONSOLE` / `NO_VISIBLE_PROMPT` **without prompting or reading**. EOF, a read error, an aborted read or any other text is refused (`EOF`, `READ_ERROR`, `INTERRUPTED`, `WRONG_CONFIRMATION`). One attempt; no retry loop. There is **no flag to skip approval** in MVP-3. The approving Windows account (`DOMAIN\user`) and the UTC time are in the output (`approval.actor`, `approval.approved_at_utc`). Ctrl+C during the prompt terminates the process before anything is started.
+
+**Waiting.** `Start` is called semi-synchronously and waited on for at most 1800 s (`kScanWaitSeconds`). Ctrl+C / Ctrl+Break during that wait stops *waiting* only: the Defender scan is not cancelled by this tool (no cancel call is used), and the result is reported as not completed. After the wait, `QuickScanStartTime` / `QuickScanEndTime` are read again; a scan counts as new only if its start time is later than the one read just before `Start`.
+
+**Exit codes (scan):**
+| Code | Status | Meaning |
+|---|---|---|
+| 0 | `COMPLETED` / `DRY_RUN_WOULD_PROCEED` | Start returned no error AND Defender shows a new quick scan that ended; or dry run where the gate passes |
+| 2 | `ACCESS_DENIED` / `START_FAILED` | Windows refused (`E_ACCESSDENIED` / `WBEM_E_ACCESS_DENIED`; usually not elevated) or Defender returned an error / nonzero `ReturnValue`. Nothing was started |
+| 3 | `STARTED_NOT_COMPLETED` / `NOT_CONFIRMED` | A new scan is visible but completion was not seen (timeout, Ctrl+C), or no error but no new scan visible. Never reported as success |
+| 4 | `REFUSED_NOT_APPLICABLE` / `REFUSED_NOT_APPROVED` | Gate refused, or approval missing/invalid (also a dry run on a machine where the real run would be refused). Distinct from 2: not an error, the scan was deliberately not started |
+
+**`scan --json`** (own document, `schema_version` 1, `"command":"scan"`, one line): `scan_type`, `dry_run`, `observed_at_utc`, `finished_at_utc`, `status`, `exit_code`, `message`, `gate{allowed, code, defender_running_mode, message, active_antivirus_products[]}`, `elevated`, `approval{required, method, asked, granted, reason, actor, approved_at_utc}`, `start{attempted, api, exec_result, completion_result, return_value, wait}`, `verification{before{quick_scan_start_utc, quick_scan_end_utc}, after{...}, new_scan_confirmed}`. Text mode prints the same facts. Vendor-supplied strings are sanitized.
+
+**Known limits.** The gate is a human-intent control, not a boundary against code already running as the same user: such code could call the WMI method itself. A ConPTY/pseudo-console that a program drives looks like a console. `elevated=false` only adds a warning to the prompt; the access-denied verdict comes from Windows. Whether `MSFT_MpScan.Start` blocks until the scan ends, and what it returns on a given build, is handled generically (semi-synchronous call, timestamps as ground truth) but was **not observed on a real Defender-primary machine**.
+
 Future:
 ```text
-meta-sec scan --quick
 meta-sec threats list
 meta-sec service status
 meta-sec policy check
@@ -126,4 +156,4 @@ meta-center devices list
 meta-center alerts list
 ```
 
-JSON stdout only for `--json`; diagnostics on stderr. Stable schema is described above. Never invent `PROTECTED` from missing observations. Exit: 0 usable read, 1 confirmed audit finding, 2 command error, 3 incomplete observation. Commands with side effects require explicit human approval; no arbitrary remote shell.
+JSON stdout only for `--json`; diagnostics on stderr. Stable schema is described above. Never invent `PROTECTED` from missing observations. Exit: 0 usable read, 1 confirmed audit finding, 2 command error, 3 incomplete observation, 4 scan refused (`scan` only). Commands with side effects require explicit human approval; no arbitrary remote shell.
