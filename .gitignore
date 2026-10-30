@@ -1,0 +1,13 @@
+build/
+out/
+.vs/
+.idea/
+*.obj
+*.pdb
+*.exe
+*.log
+*.db
+*.sqlite*
+.env
+.env.*
+!*.example
