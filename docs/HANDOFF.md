@@ -118,7 +118,7 @@ meta-sec center join/status/leave # MVP-7
 meta-center devices list         # MVP-8
 ```
 
-Exit codes: 0 successful read with no known violation; 1 confirmed policy violation (audit); 2 command/engine error; 3 incomplete or insufficient observation. A status inspection is **not** a full AV security certification; overall names must reflect the distinction.
+Exit codes: 0 successful read with no known violation; 1 confirmed policy violation (audit); 2 command/engine error; 3 incomplete or insufficient observation; 4 side-effect action deliberately refused (gate not met or human approval missing — `scan` only, added in MVP-3). A status inspection is **not** a full AV security certification; overall names must reflect the distinction.
 
 Suggested JSON `schema_version: 1` fields: `product, version, mode, hostname, observed_at_utc, checks[], overall`. Each check has `name, state, source, error` initially; evolve additively with `evidence`, timestamps and rule IDs.
 
