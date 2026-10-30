@@ -111,7 +111,12 @@ struct IpcRawReply {
     IpcReach reach = IpcReach::NotTried;
     std::string reason;
     std::string line;  // the reply, terminator included, when reach == Ok
+    bool retriable = false;  // pipe busy, or dropped before any reply byte: ipc_call retried this already
 };
+
+// A busy or dropped connection is retried at most this many more times, backing off 200 ms then 400 ms.
+inline constexpr int kIpcClientMaxRetries = 2;
+inline constexpr int kIpcClientRetryBackoffMs = 200;
 IpcRawReply ipc_call(const IpcClientOptions& opt, const std::string& request_bytes);
 
 IpcSnapshot ipc_fetch_status(const IpcClientOptions& opt);

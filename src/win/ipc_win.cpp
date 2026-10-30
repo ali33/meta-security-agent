@@ -268,7 +268,9 @@ void IpcServer::serve(HANDLE pipe, HANDLE io_event, bool reserved) {
 
 // ---- client ----------------------------------------------------------------------------------
 
-IpcRawReply ipc_call(const IpcClientOptions& opt, const std::string& request_bytes) {
+namespace {
+
+IpcRawReply ipc_call_once(const IpcClientOptions& opt, const std::string& request_bytes) {
     IpcRawReply out;
     const std::wstring path = pipe_path(opt.pipe_name.empty() ? kDefaultPipeName : opt.pipe_name);
     const ULONGLONG deadline = deadline_in(opt.timeout_ms);
@@ -293,6 +295,7 @@ IpcRawReply ipc_call(const IpcClientOptions& opt, const std::string& request_byt
             out.reason = (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) ? "status pipe not found"
                          : e == ERROR_PIPE_BUSY                                    ? "status pipe is busy"
                                                                                    : "WIN32:" + std::to_string(e);
+            out.retriable = e == ERROR_PIPE_BUSY;
         }
         return out;
     }
@@ -328,6 +331,7 @@ IpcRawReply ipc_call(const IpcClientOptions& opt, const std::string& request_byt
         if (w != Io::Ok) {
             out.reach = IpcReach::Unreachable;
             out.reason = w == Io::Timeout ? "timed out sending the request" : "status pipe closed while sending";
+            out.retriable = w != Io::Timeout;  // dropped by the server (e.g. its short request deadline)
             return out;
         }
         sent += put;
@@ -364,6 +368,17 @@ IpcRawReply ipc_call(const IpcClientOptions& opt, const std::string& request_byt
     }
     out.reach = IpcReach::Ok;
     out.line = std::move(line);
+    return out;
+}
+
+}  // namespace
+
+IpcRawReply ipc_call(const IpcClientOptions& opt, const std::string& request_bytes) {
+    IpcRawReply out = ipc_call_once(opt, request_bytes);
+    for (int attempt = 0; attempt < kIpcClientMaxRetries && out.retriable; ++attempt) {
+        Sleep(static_cast<DWORD>(kIpcClientRetryBackoffMs * (attempt + 1)));
+        out = ipc_call_once(opt, request_bytes);
+    }
     return out;
 }
 

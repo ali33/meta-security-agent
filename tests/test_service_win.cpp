@@ -655,6 +655,40 @@ void test_client_failures() {
     CHECK(info.install == InstallState::Installed || pid == 0);  // not installed (CI, dev): no process id
 }
 
+// A busy pipe is retried (2 more attempts, 200 ms + 400 ms backoff); "not found" is not retried.
+void test_client_retry() {
+    {
+        IpcClientOptions o;
+        o.pipe_name = random_pipe_name();
+        o.timeout_ms = 300;
+        const ULONGLONG t0 = GetTickCount64();
+        const IpcRawReply r = ipc_call(o, "STATUS\n");
+        CHECK(r.reach == IpcReach::Unreachable && !r.retriable);
+        CHECK(GetTickCount64() - t0 < 150);  // no retry, no backoff
+    }
+    {
+        // One-instance pipe, already occupied by a connected client: every attempt sees ERROR_PIPE_BUSY.
+        const std::string name = random_pipe_name();
+        const std::wstring path = L"\\\\.\\pipe\\" + std::wstring(name.begin(), name.end());
+        HANDLE server = CreateNamedPipeW(path.c_str(), PIPE_ACCESS_DUPLEX, PIPE_TYPE_BYTE | PIPE_REJECT_REMOTE_CLIENTS,
+                                         1, 4096, 4096, 0, nullptr);
+        CHECK(server != INVALID_HANDLE_VALUE);
+        HANDLE occupant = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+        CHECK(occupant != INVALID_HANDLE_VALUE);
+        IpcClientOptions o;
+        o.pipe_name = name;
+        o.timeout_ms = 300;
+        const ULONGLONG t0 = GetTickCount64();
+        const IpcRawReply r = ipc_call(o, "STATUS\n");
+        const ULONGLONG dt = GetTickCount64() - t0;
+        CHECK(r.reach == IpcReach::Unreachable && contains(r.reason, "busy") && r.retriable);
+        CHECK(dt >= 3 * 300 + 200 + 400 - 100);  // three attempts plus both backoffs
+        CHECK(dt < 6000);
+        if (occupant != INVALID_HANDLE_VALUE) CloseHandle(occupant);
+        if (server != INVALID_HANDLE_VALUE) CloseHandle(server);
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -662,6 +696,7 @@ int main() {
     test_constants_and_sddl();
     test_data_dir();
     test_client_failures();
+    test_client_retry();
     test_round_trip_and_hostile_clients();
     test_restart_persistence();
     test_degraded_but_alive();

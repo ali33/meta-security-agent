@@ -158,6 +158,8 @@ Same strict parser as `watch`/`scan`: no duplicate flags, strict integers, unkno
 
 The service is **optional**: every standalone command works without it. It only observes (the same read-only checks as `watch`) and keeps small change events in a local SQLite file; it never changes a setting and never starts a scan.
 
+**Pipe retries.** `service status` and `service events` retry a busy pipe, or a connection dropped before any reply byte, at most 2 more times (200 ms, then 400 ms backoff). "Pipe not found" and "access denied" are never retried.
+
 **`service status` exit codes** (the observation is the result, so "not installed" is not an error):
 | Situation | `verdict` | `overall` | Exit |
 |---|---|---|---|
