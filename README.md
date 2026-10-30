@@ -2,7 +2,7 @@
 
 Open-source **C++20**, **standalone-first**, **console-first** endpoint security auditing and management toolkit.
 
-**Status: MVP-0 (`status`), MVP-1 (`audit`), MVP-2 (`watch`) and MVP-3 (`scan --quick`) prototype. Not a replacement for antivirus/EDR. Not production-ready.**
+**Status: MVP-0 (`status`), MVP-1 (`audit`), MVP-2 (`watch`) and MVP-3 (`scan --quick`), and MVP-4 (`service`) prototype. Not a replacement for antivirus/EDR. Not production-ready.**
 
 ## Goals
 - **Run first:** a single `meta-sec.exe` gives real Windows security observations locally without network, Center or database.
@@ -12,7 +12,7 @@ Open-source **C++20**, **standalone-first**, **console-first** endpoint security
 - **Safe by default:** read-only, deny-by-default, per-agent identity, least privilege, explicit human approval for side effects.
 
 ## Build and test (Windows x64)
-Requirements: Visual Studio 2022 (MSVC, C++ desktop workload) and CMake >= 3.20. No third-party libraries.
+Requirements: Visual Studio 2022 (MSVC, C++ desktop workload) and CMake >= 3.20. Only third-party code: SQLite (public domain) vendored in `third_party/sqlite`; the build needs no network.
 
 ```powershell
 cmake -S . -B build -A x64
@@ -37,7 +37,9 @@ ctest --test-dir build -C Release --output-on-failure
 
 `meta-sec scan --quick` is the first command with a side effect: it starts **one Microsoft Defender quick scan**, and nothing else (no full/custom scan, no remediation, no quarantine, no setting change). It runs only when (1) Defender is the primary engine (`AMRunningMode` exactly `Normal`; passive, not running or unreadable is **refused** and the antivirus that is actually active is named, because Windows has no common interface to command a third-party antivirus) and (2) a human types `START QUICK SCAN` on a real console: if stdin is not a console (pipe, file, `NUL`) or stderr is redirected, it refuses without prompting. There is no flag that skips the approval. The approving Windows account and time are recorded in the output. `--dry-run` shows what would happen and starts nothing. Exit `0` completed (a new scan is visible in Defender's own timestamps), `4` refused (not applicable or not approved), `3` not confirmed or still running when we stopped waiting, `2` error (including access denied). **Verified on a Windows 11 machine only for the refusal paths** (Defender not running, non-admin); a real scan has **not** been run on a machine where Defender is the primary engine. See [docs/CLI.md](docs/CLI.md) and [docs/SECURITY.md](docs/SECURITY.md).
 
-Evidence from a real machine: [MVP-0](docs/evidence/mvp0-win11.md), [MVP-1](docs/evidence/mvp1-win11.md), [MVP-2](docs/evidence/mvp2-win11.md), [MVP-3](docs/evidence/mvp3-win11.md). Windows Server has not been tested.
+`meta-sec service ...` (MVP-4) adds an optional background observer: the same `meta-sec.exe` runs as a Windows service (`NT AUTHORITY\LocalService`), polls the status checks with the `watch` logic and stores confirmed changes in a local SQLite database under `%ProgramData%\MetaSecAgent` (ACL: SYSTEM/Administrators/service only; capped at 10,000 rows / 16 MiB, oldest rotated out). `service status [--json]` and `service events [--limit N]` read it through a read-only local named pipe (allowlist STATUS/HEALTH/EVENTS, no remote clients), so no elevation is needed to look; with no service installed they say so plainly (exit 0) and `status`/`audit`/`watch`/`scan` keep working standalone. `service install|uninstall` need Administrator rights, a binary under Program Files or Windows, and a typed confirmation on a real console (else exit 4); `--dry-run` shows the plan. `service run --console` runs the observer in the foreground. **Verified here only without admin: foreground observer, store, pipe, status/refusals. Installing the service, running under the Service Control Manager and surviving a reboot were NOT tested.** See [docs/CLI.md](docs/CLI.md), [docs/SECURITY.md](docs/SECURITY.md).
+
+Evidence from a real machine: [MVP-0](docs/evidence/mvp0-win11.md), [MVP-1](docs/evidence/mvp1-win11.md), [MVP-2](docs/evidence/mvp2-win11.md), [MVP-3](docs/evidence/mvp3-win11.md), [MVP-4](docs/evidence/mvp4-win11.md). Windows Server has not been tested.
 
 
 ## Start here
