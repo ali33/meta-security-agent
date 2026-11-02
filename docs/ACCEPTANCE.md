@@ -121,7 +121,7 @@ Boxes stay unchecked until a human accepts. Details in [evidence/mvp5-win11.md](
 |---|---|
 | `meta-sec policy check` exists; per rule: expected, observed + evidence, data source, verdict | PASS on Windows 11 (built-in baseline: 5 COMPLIANT, 2 NOT_APPLICABLE, exit 0) |
 | Read-only: no remediation, no network, no scan/service | PASS by design and by tests (no write flag exists; bad flags exit 2) |
-| Versioned, strict baseline format; unknown keys and rule ids rejected; built-in default | PASS (`policy_unit` 5,379 checks incl. ~150 hostile policies; `cli_policy_bad_files`) |
+| Versioned, strict baseline format; unknown keys and rule ids rejected; built-in default | PASS (`policy_unit` 7,456 checks incl. ~150 hostile policies; `cli_policy_bad_files`) |
 | Unobservable rule is INCOMPLETE, never COMPLIANT (also: missing rule, nothing verified) | PASS (invariant sweep, unit) |
 | Malformed / oversized / hostile policy files: exit 2, no partial report, path not echoed | PASS on the real binary (14 file cases incl. 70,000-byte file, directory, `NUL`, junction in path) |
 | Known rule violation yields DRIFT with evidence, exit 1 | PASS with **fake machine states** (`test_end_to_end_drift`). **NOT produced on a real machine** (no setting may be weakened) |

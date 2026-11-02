@@ -10,10 +10,10 @@ Captured 2026-11-02 from branch `feat/mvp5-policy` (from `main` 146e95e). Host n
 | OS | Microsoft Windows 11 Pro, 10.0.26200 (client) |
 | Compiler | MSVC 19.44 (VS 2022 Build Tools), `/W4 /WX /EHsc /utf-8 /permissive- /sdl /guard:cf`; link `/guard:cf /CETCOMPAT /DEPENDENTLOADFLAG:0x800` |
 | Build | CMake 4.0.2, "Visual Studio 17 2022" x64, Release |
-| Tests | ctest **46/46** passed: `policy_unit` (**5,379 checks**), `policy_json_roundtrip`, 7 `cli_policy_*` e2e modes, plus all earlier suites unchanged (`core_unit` 180, `audit_unit` 79,909) |
+| Tests | ctest **46/46** passed: `policy_unit` (**7,456 checks**), `policy_json_roundtrip`, 7 `cli_policy_*` e2e modes, plus all earlier suites unchanged (`core_unit` 180, `audit_unit` 79,909) |
 | Elevation | **Non-admin** (elevated run NOT tested) |
 | Machine state | Defender `Not running`, Bitdefender the active AV; firewall Domain/Private/Public enabled |
-| `meta-sec.exe` SHA256 | `6146BC0797C1E1AD9CBEB233BC731DD714A3E47F480C3E77BE1EEFFB1C2448D0` (working tree at the time of capture, after the review fixes; committed together with this file) |
+| `meta-sec.exe` SHA256 | `D45F3F084B4C8C1D4DC9734F4DDC2CC14FF1AB71117C82A98345CC099B024D7B` (clean rebuild of the final source (commit following a95cac4: render wording + test spacing); a rebuild on another machine will differ (paths, timestamps)) |
 
 ## Real run, JSON (`policy check --json`, exit 0, stderr empty; excerpt)
 ```json
@@ -44,6 +44,12 @@ Two independent reviewers (code and security, different agents from the author) 
 - AV-004 policy limit could give COMPLIANT while the audit said FAIL with no explanation; the detail now states the replaced threshold and the audit's own result (still a design choice, see decisions).
 - Missing-rule record had empty title/remediation; filled. E2E tests now assert the specific rejection reason per file.
 Not done (reported as limits in SECURITY.md): policy hash / coverage marker, check-then-open race on a directory swapped by a local attacker, `subst` drive pointing at a share.
+
+## Round 2 (user decisions, commit a95cac4 and follow-up)
+- `max_signature_age_days` is now 1..3 and can only tighten; 4, 5, 7, 30, 365, 366 are policy errors (unit tests and e2e files `loose_limit.json`, `very_loose_limit.json`: exit 2, "only tighten"). A brute force over ages 4..400 and every admissible limit never gives COMPLIANT where the audit says FAIL.
+- `policy_sha256` (own SHA-256 implementation, checked against NIST vectors incl. 1,000,000 x 'a' and against Python's hashlib for 55/56/64 bytes; the e2e test compares it with CMake's own `file(SHA256)` of the same file) and `coverage` n/7 in JSON and text.
+- Policy signing is **deferred to MVP-7**; HANDOFF section H is **not met** (hash identifies, it does not authenticate).
+- Quick independent review of the round-2 diff: approve, 3 LOW notes (CMake spacing warning, built-in wording, a length-only test loop); the first two fixed.
 
 ## What was NOT tested
 - A real drift on a real machine (no setting weakened); a real INCOMPLETE on a real OS.
