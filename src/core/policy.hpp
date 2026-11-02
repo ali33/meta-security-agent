@@ -32,6 +32,8 @@ const std::vector<std::string>& known_policy_rule_ids();
 struct PolicyRule {
     std::string rule_id;
     // META-AV-004 only: the policy's own limit for signature age. Absent = the audit's built-in limit.
+    // When present it REPLACES the audit's threshold (it may be looser or stricter), so the verdict can
+    // differ from the audit's result; the report's `detail` says so.
     std::optional<int> max_signature_age_days;
 };
 
@@ -101,7 +103,8 @@ struct PolicySummary {
 PolicySummary summarize(const PolicyReport& r);
 
 // Drift: at least one confirmed violation. Incomplete: no drift, but something is unobserved (or
-// the policy has no rules). NoDrift: only COMPLIANT / NOT_APPLICABLE.
+// the policy has no rules, or no rule is COMPLIANT). NoDrift: no drift, nothing unobserved, and at
+// least one rule affirmatively COMPLIANT (NOT_APPLICABLE alone verifies nothing).
 enum class PolicyOverall { NoDrift, Drift, Incomplete };
 const char* to_string(PolicyOverall o);
 PolicyOverall policy_overall(const PolicyReport& r);

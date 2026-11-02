@@ -287,7 +287,13 @@ void test_missing_rule_is_incomplete() {
     const PolicyReport r = evaluate_policy(policy_of({{"META-FW-001", std::nullopt}}), a);
     CHECK(r.rules.size() == 1 && r.rules[0].verdict == PolicyVerdict::Incomplete);
     CHECK(r.rules[0].observed == RuleResult::Unknown);
+    CHECK(!r.rules[0].title.empty() && !r.rules[0].remediation.empty() && !r.rules[0].check_ids.empty());
+    CHECK(render_policy_text(r, "1").find("fix: Nothing was observed") != std::string::npos);
     CHECK(policy_overall(r) == PolicyOverall::Incomplete);
+    // A policy whose rules are all NOT_APPLICABLE verified nothing: INCOMPLETE (exit 3), never NO_DRIFT.
+    const PolicyReport na = evaluate_policy(default_policy(), audit_all(RuleResult::NotApplicable));
+    CHECK(policy_overall(na) == PolicyOverall::Incomplete && summarize(na).compliant == 0 && summarize(na).not_applicable == 7);
+    CHECK(policy_exit_code(policy_overall(na)) == 3);
     CHECK(policy_exit_code(policy_overall(r)) == 3);
     // an empty audit never yields compliance
     const PolicyReport e = evaluate_policy(default_policy(), AuditReport{});
@@ -430,6 +436,9 @@ void test_end_to_end_drift() {
         CHECK(strict && strict->verdict == PolicyVerdict::Drift);
         const PolicyReport loose = evaluate_policy(policy_of({{"META-AV-004", 7}}), a);
         CHECK(loose.rules[0].verdict == PolicyVerdict::Compliant);
+        // the override is explained, never silent: the audit's own result and threshold are in the detail
+        CHECK(loose.rules[0].detail.find("replaces the audit threshold of 3") != std::string::npos);
+        CHECK(loose.rules[0].detail.find("audit itself says FAIL") != std::string::npos);
     }
 }
 

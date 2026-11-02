@@ -225,6 +225,10 @@ PolicyReport evaluate_policy(const Policy& policy, const AuditReport& audit) {
             res.verdict = PolicyVerdict::Incomplete;
             res.observed = RuleResult::Unknown;
             res.detail = "the audit did not produce this rule, so nothing was observed";
+            res.title = "(rule not produced by the audit)";
+            res.remediation = "Nothing was observed for this rule; run `meta-sec audit` and report the missing rule.";
+            res.check_ids = {"none"};
+            res.sources = {"none"};
             r.rules.push_back(std::move(res));
             continue;
         }
@@ -254,14 +258,19 @@ PolicyReport evaluate_policy(const Policy& policy, const AuditReport& audit) {
                     if (!age || !parse_nonneg(*age, days)) {
                         res.verdict = PolicyVerdict::Incomplete;
                         res.detail = "the audit reported no usable signature age, so the policy limit cannot be checked";
-                    } else if (days <= *pr.max_signature_age_days) {
-                        res.verdict = PolicyVerdict::Compliant;
-                        res.detail = "signature age " + std::to_string(days) + " day(s) is within the policy limit of " +
-                                     std::to_string(*pr.max_signature_age_days);
                     } else {
-                        res.verdict = PolicyVerdict::Drift;
-                        res.detail = "signature age " + std::to_string(days) + " day(s) exceeds the policy limit of " +
-                                     std::to_string(*pr.max_signature_age_days);
+                        // The policy limit overrides the audit's own threshold; say so, so that a verdict
+                        // that differs from observed.result is never unexplained.
+                        const std::string note = " (policy limit " + std::to_string(*pr.max_signature_age_days) +
+                                                 " day(s) replaces the audit threshold of " + std::to_string(kSignatureMaxAgeDays) +
+                                                 "; the audit itself says " + to_string(f->result) + ")";
+                        if (days <= *pr.max_signature_age_days) {
+                            res.verdict = PolicyVerdict::Compliant;
+                            res.detail = "signature age " + std::to_string(days) + " day(s) is within the policy limit" + note;
+                        } else {
+                            res.verdict = PolicyVerdict::Drift;
+                            res.detail = "signature age " + std::to_string(days) + " day(s) exceeds the policy limit" + note;
+                        }
                     }
                 } else if (f->result == RuleResult::Pass) {
                     res.verdict = PolicyVerdict::Compliant;
@@ -294,7 +303,8 @@ PolicyOverall policy_overall(const PolicyReport& r) {
     if (r.rules.empty()) return PolicyOverall::Incomplete;
     const PolicySummary s = summarize(r);
     if (s.drift > 0) return PolicyOverall::Drift;
-    return s.incomplete > 0 ? PolicyOverall::Incomplete : PolicyOverall::NoDrift;
+    // Nothing affirmatively verified (no COMPLIANT rule, e.g. every rule NOT_APPLICABLE) is not a clean bill.
+    return (s.incomplete > 0 || s.compliant == 0) ? PolicyOverall::Incomplete : PolicyOverall::NoDrift;
 }
 
 int policy_exit_code(PolicyOverall o) {

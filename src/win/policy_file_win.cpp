@@ -44,9 +44,41 @@ PolicyFileRead read_policy_file(const std::string& utf8_path) {
     MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, utf8_path.data(), static_cast<int>(utf8_path.size()),
                         wide.data(), n);
 
-    // Read-only, share-read; no FILE_FLAG_DELETE_ON_CLOSE, no write access ever requested.
-    Handle file(CreateFileW(wide.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-                            FILE_ATTRIBUTE_NORMAL, nullptr));
+    // BEFORE opening anything: the drive the path lands on must be local. A mapped network drive would
+    // otherwise be contacted (SMB, NTLM) by CreateFile before any check on the opened handle could run.
+    std::wstring full(MAX_PATH * 2, L'\0');
+    const DWORD flen = GetFullPathNameW(wide.c_str(), static_cast<DWORD>(full.size()), full.data(), nullptr);
+    if (flen == 0 || flen >= full.size()) return fail("policy file path cannot be resolved");
+    full.resize(flen);
+    if (full.size() < 3 || !((full[0] >= L'A' && full[0] <= L'Z') || (full[0] >= L'a' && full[0] <= L'z')) ||
+        full[1] != L':' || full[2] != L'\\')
+        return fail("policy file is not on a local drive; copy it to a local disk");
+    const std::wstring root = full.substr(0, 3);
+    const UINT dt = GetDriveTypeW(root.c_str());
+    if (dt != DRIVE_FIXED && dt != DRIVE_REMOVABLE && dt != DRIVE_CDROM && dt != DRIVE_RAMDISK)
+        return fail("policy file is not on a local drive; copy it to a local disk");
+
+    // No component of the path may be a reparse point (symlink, junction, subst-to-share target...): the
+    // final-component flag below does not stop a linked DIRECTORY in the middle of the path from leading to a
+    // share. Each prefix is inspected without being opened (GetFileAttributesW does not follow the last part).
+    for (std::size_t pos = 3; pos <= full.size(); ++pos) {
+        if (pos != full.size() && full[pos] != L'\\') continue;
+        const std::wstring prefix = full.substr(0, pos);
+        const DWORD attr = GetFileAttributesW(prefix.c_str());
+        if (attr == INVALID_FILE_ATTRIBUTES) {
+            const DWORD e = GetLastError();
+            if (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) return fail("policy file not found");
+            return fail("policy file path cannot be inspected (Win32 error " + std::to_string(e) + ")");
+        }
+        if (attr & FILE_ATTRIBUTE_REPARSE_POINT)
+            return fail("policy file path contains a link (symlink or junction); use a real local path");
+    }
+
+    // Read-only, share-read; no write access ever requested. Reparse points are opened as themselves
+    // (not followed) and refused below, so a link to a share, and cloud placeholders that would be
+    // downloaded on read, never get read.
+    Handle file(CreateFileW(full.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, nullptr));
     if (!file.valid()) {
         const DWORD e = GetLastError();
         if (e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND) return fail("policy file not found");
@@ -58,6 +90,9 @@ PolicyFileRead read_policy_file(const std::string& utf8_path) {
     BY_HANDLE_FILE_INFORMATION info{};
     if (!GetFileInformationByHandle(file.get(), &info)) return fail("policy file cannot be inspected");
     if (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) return fail("policy path is a directory, not a file");
+    if (info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_OFFLINE | FILE_ATTRIBUTE_RECALL_ON_OPEN |
+                                 FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS))
+        return fail("policy file is a link or an online-only (cloud) file; copy a real file to a local disk");
 
     // Network share (also reached through a mapped drive or a link): refused, so reading the policy can
     // never cause network traffic. If the final path cannot be determined, refuse (fail closed).
