@@ -268,7 +268,8 @@ std::string render_policy_text(const PolicyReport& r, const std::string& version
     o += std::format("Platform: {} {} ({})\n", r.platform.os, r.platform.version, r.platform.kind);
     o += std::format("Observed: {}\n", r.observed_at_utc);
     o += std::format("Policy: {} v{} ({})\n", printable(r.policy_id), r.policy_version, printable(r.policy_source));
-    o += std::format("Policy SHA-256: {} (identifies the bytes read; not a signature)\n", printable(r.policy_sha256));
+    o += std::format("Policy SHA-256: {} ({}; not a signature)\n", printable(r.policy_sha256),
+                     r.policy_source == "built-in" ? "built-in baseline identifier" : "identifies the bytes read");
     o += std::format("Coverage: {}/{} rules covered{}\n", r.rules_covered, r.rules_total,
                      r.rules_covered < r.rules_total ? " (rules not named by the policy are NOT checked)" : "");
     for (const auto& x : r.rules) {

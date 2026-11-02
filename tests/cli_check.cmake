@@ -897,7 +897,7 @@ elseif(MODE STREQUAL "policy_bad_files")
   # Each hostile file must be refused for ITS OWN reason (expected stderr fragment), not just refused.
   foreach(pair "empty.json~policy is empty" "malformed.json~not valid JSON" "not_object.json~must be a JSON object"
                "unknown_key.json~unknown key" "unknown_rule.json~unknown rule id" "dup_rule.json~duplicate rule id"
-               "bad_expect.json~expect must be" "loose_limit.json~only tighten" "very_loose_limit.json~only tighten""future_schema.json~unsupported policy schema_version"
+               "bad_expect.json~expect must be" "loose_limit.json~only tighten" "very_loose_limit.json~only tighten" "future_schema.json~unsupported policy schema_version"
                "trailing.json~not valid JSON" "deep.json~not valid JSON" "huge.json~larger than"
                "a_directory.json~(directory|access denied)" "missing.json~not found" "NUL~local drive")
     string(REPLACE "~" ";" parts "${pair}")
