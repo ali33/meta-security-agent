@@ -1,7 +1,9 @@
 #pragma once
 // Pure security-core types. No Windows headers: everything here is unit-testable on any host.
 #include <cstdint>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -20,6 +22,8 @@ enum class State {
 };
 
 const char* to_string(State s);
+// Inverse of to_string(State); exact, case-sensitive; nullopt for anything else.
+std::optional<State> state_from_string(std::string_view s);
 
 // States that mean "we did not actually observe the setting".
 bool is_incomplete(State s);

@@ -75,6 +75,10 @@ struct ApprovalDecision {
 };
 
 ApprovalDecision evaluate_approval(const ApprovalInput& in);
+// Same state machine for any action: `phrase` is the exact line the human must type (case-sensitive,
+// one line terminator required). An empty `phrase` never approves. evaluate_approval(in) is this
+// with kScanConfirmPhrase. Reused by `service install` / `service uninstall`.
+ApprovalDecision evaluate_approval(const ApprovalInput& in, std::string_view phrase);
 
 // Text shown before asking. `actor` is the Windows account that will be recorded.
 std::string approval_prompt_text(const std::string& actor, const std::string& running_mode, bool elevated);

@@ -19,6 +19,13 @@ const char* to_string(State s) {
     return "UNKNOWN";
 }
 
+std::optional<State> state_from_string(std::string_view s) {
+    for (State st : {State::Enabled, State::Disabled, State::Good, State::Poor, State::Snooze, State::NotMonitored,
+                     State::Passive, State::Unknown, State::NotSupported})
+        if (s == to_string(st)) return st;
+    return std::nullopt;
+}
+
 bool is_incomplete(State s) {
     return s == State::Unknown || s == State::NotSupported || s == State::NotMonitored;
 }

@@ -94,3 +94,21 @@ Boxes stay unchecked until a human accepts. Details and raw output in [evidence/
 | CI never starts a real scan | PASS by construction: e2e feeds the phrase on a redirected stdin and asserts exit 4 / `start.attempted=false`; no test provides a console |
 | Automated tests incl. negative; bad args -> exit 2 | PASS: see evidence for counts |
 | Windows Server, second machine | NOT TESTED |
+
+
+## MVP-4 status record (2026-10-31, branch `feat/mvp4-service`, from `main` at `4e937e7`)
+Boxes stay unchecked until a human accepts. Details in [evidence/mvp4-win11.md](evidence/mvp4-win11.md).
+
+| Item (HANDOFF section F, MVP 4: "Service survives reboot, local CLI works offline, events persist") | Result |
+|---|---|
+| `meta-sec service status` exists; service absent/stopped is reported plainly, not as a fake error | PASS on Windows 11 (not installed -> exit 0, `installed:false`); unit-tested for every verdict |
+| Local CLI works offline / standalone | PASS: `status`/`audit`/`watch`/`scan` unchanged and never need the service; no network code |
+| Events persist (SQLite, versioned migration, cursor, quota rotation, no duplicates after restart) | PASS in unit and integration tests (restart of the whole stack in a temp dir keeps events, no duplicates) and in a real foreground run |
+| Read-only local pipe: allowlist STATUS/HEALTH/EVENTS, bad/oversize/slow requests rejected | PASS (unit + real named-pipe integration test, flood test) |
+| Pipe/data-dir ACLs as designed (reject remote, deny network, protected DACL) | Implemented and code-reviewed; **not verified on a real installed service** (no admin) |
+| Install/uninstall gated by admin + path policy + typed console approval, exit 4 otherwise; never creates a service in tests | PASS (sweep proving the change hook is unreachable without the gate; e2e refusals; real non-admin refusal) |
+| Runs under the Service Control Manager (STOP/SHUTDOWN/PRESHUTDOWN) | **NOT TESTED** (code only) |
+| **Survives reboot** | **NOT TESTED** |
+| LocalService can read Defender WMI/firewall | **NOT MEASURED** |
+| Install/uninstall Event Log record | **NOT TESTED** (needs admin) |
+| Windows Server, second machine | NOT TESTED |

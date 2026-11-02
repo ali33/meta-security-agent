@@ -162,7 +162,9 @@ ScanGate evaluate_scan_gate(const DefenderScanObservation& def, const AvProducts
     return g;
 }
 
-ApprovalDecision evaluate_approval(const ApprovalInput& in) {
+ApprovalDecision evaluate_approval(const ApprovalInput& in) { return evaluate_approval(in, kScanConfirmPhrase); }
+
+ApprovalDecision evaluate_approval(const ApprovalInput& in, std::string_view phrase) {
     // Order matters: every refusal is decided before the typed text is even looked at.
     if (!in.input_is_console) return {false, "NOT_A_CONSOLE"};
     if (!in.output_is_console) return {false, "NO_VISIBLE_PROMPT"};
@@ -180,7 +182,7 @@ ApprovalDecision evaluate_approval(const ApprovalInput& in) {
         line.pop_back();
     else
         return {false, "WRONG_CONFIRMATION"};
-    if (line == kScanConfirmPhrase) return {true, "APPROVED"};
+    if (!phrase.empty() && line == phrase) return {true, "APPROVED"};
     return {false, "WRONG_CONFIRMATION"};
 }
 
