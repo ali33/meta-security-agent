@@ -216,8 +216,10 @@ std::string render_policy_json(const PolicyReport& r, const std::string& version
     o += "},\"policy\":{\"policy_schema_version\":" + std::to_string(kPolicySchemaVersion) + ',';
     put_kv(o, "policy_id", r.policy_id); o += ',';
     o += "\"policy_version\":" + std::to_string(r.policy_version) + ',';
-    put_kv(o, "source", r.policy_source);
-    o += "},\"rules\":[";
+    put_kv(o, "source", r.policy_source); o += ',';
+    put_kv(o, "policy_sha256", r.policy_sha256);
+    o += "},\"coverage\":{\"rules_covered\":" + std::to_string(r.rules_covered) +
+         ",\"rules_total\":" + std::to_string(r.rules_total) + "},\"rules\":[";
     bool first = true;
     for (const auto& x : r.rules) {
         if (!first) o += ',';
@@ -266,6 +268,9 @@ std::string render_policy_text(const PolicyReport& r, const std::string& version
     o += std::format("Platform: {} {} ({})\n", r.platform.os, r.platform.version, r.platform.kind);
     o += std::format("Observed: {}\n", r.observed_at_utc);
     o += std::format("Policy: {} v{} ({})\n", printable(r.policy_id), r.policy_version, printable(r.policy_source));
+    o += std::format("Policy SHA-256: {} (identifies the bytes read; not a signature)\n", printable(r.policy_sha256));
+    o += std::format("Coverage: {}/{} rules covered{}\n", r.rules_covered, r.rules_total,
+                     r.rules_covered < r.rules_total ? " (rules not named by the policy are NOT checked)" : "");
     for (const auto& x : r.rules) {
         std::string expected = "PASS";
         if (x.max_signature_age_days) expected += std::format(" (signature age <= {} days)", *x.max_signature_age_days);

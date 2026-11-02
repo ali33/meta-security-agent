@@ -219,10 +219,12 @@ Strict: JSON object, UTF-8 (a leading BOM is tolerated), at most **64 KiB**, nes
 | `rules` | array of 1..32 objects; each `rule_id` appears at most once |
 | `rules[].rule_id` | one of the seven audit rules: `META-FW-001..003`, `META-AV-001..004`. Any other id is an error |
 | `rules[].expect` | exactly `"PASS"` (the only expectation in schema 1; a future schema may add more) |
-| `rules[].max_signature_age_days` | optional, **only for `META-AV-004`**, integer 1..365. The policy's own limit then decides from the signature age the audit observed (inclusive). Without it the audit's built-in 3-day verdict is used |
+| `rules[].max_signature_age_days` | optional, **only for `META-AV-004`**, integer **1..3** (3 = the audit's `kSignatureMaxAgeDays`). A policy can only **tighten**, never loosen: any value above 3 is a policy error (exit 2, "a policy may only tighten the audit limit, never loosen it"). The policy limit then decides from the signature age the audit observed (inclusive). Without it the audit's built-in 3-day verdict is used |
 Rules the policy does not list are not checked and not shown.
 
-`--policy-file PATH`: 1-260 characters, no control characters or wildcards, **no UNC (`\\server\share`), device (`\\.\`, `\\?\`) or rooted-without-drive path, no alternate data stream or drive-relative path** (refused by the parser, exit 2). The reader also refuses, before opening: a non-local drive (mapped network drive) and any path component that is a link (symlink/junction); and after opening: anything that is not a regular file (directory, `NUL`/console/pipe), online-only cloud files, and a file over 64 KiB (checked from the size and again while reading). With `max_signature_age_days` the policy limit **replaces** the audit threshold (looser or stricter), so `verdict` can differ from `observed.result`; `detail` says so.
+`--policy-file PATH`: 1-260 characters, no control characters or wildcards, **no UNC (`\\server\share`), device (`\\.\`, `\\?\`) or rooted-without-drive path, no alternate data stream or drive-relative path** (refused by the parser, exit 2). The reader also refuses, before opening: a non-local drive (mapped network drive) and any path component that is a link (symlink/junction); and after opening: anything that is not a regular file (directory, `NUL`/console/pipe), online-only cloud files, and a file over 64 KiB (checked from the size and again while reading). With `max_signature_age_days` the verdict can be **stricter** than `observed.result` (e.g. audit PASS at 3 days, policy limit 2 = DRIFT) but never looser; `detail` says so.
+
+**Identity and coverage.** The report carries `policy.policy_sha256`: the SHA-256 of the exact bytes read from the file (a BOM or any whitespace changes it), or `builtin:meta-default-baseline:v1` for the built-in baseline. It **identifies** the file; it is **not a signature** and proves nothing about who wrote it (signing is deferred to MVP-7, see SECURITY.md). `coverage` = `{"rules_covered":n,"rules_total":7}`: how many audit rules the policy names. Text mode prints `Policy SHA-256: ...` and `Coverage: n/7 rules covered` (with a warning when n < 7: rules not named are not checked).
 
 ### Verdicts
 Per rule: `expected` is `PASS` (plus the optional limit); `observed` is the audit's result for that rule with its evidence and provenance.
@@ -240,7 +242,9 @@ With `max_signature_age_days`: PASS/FAIL are decided by the observed `signature_
 ```json
 {"schema_version":1,"command":"policy check","product":"META Security Agent","version":"0.1.0","mode":"standalone",
  "hostname":"...","observed_at_utc":"...","platform":{"os":"windows","version":"10.0.26200","kind":"client"},
- "policy":{"policy_schema_version":1,"policy_id":"meta-default-baseline","policy_version":1,"source":"built-in"},
+ "policy":{"policy_schema_version":1,"policy_id":"meta-default-baseline","policy_version":1,"source":"built-in",
+          "policy_sha256":"builtin:meta-default-baseline:v1"},
+ "coverage":{"rules_covered":7,"rules_total":7},
  "rules":[{"rule_id":"META-FW-003","rule_version":1,"title":"...","severity":"HIGH",
            "expected":{"result":"PASS"},
            "observed":{"result":"FAIL","evidence":{"profile":"Public","state":"DISABLED"}},

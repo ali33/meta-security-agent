@@ -129,4 +129,5 @@ Boxes stay unchecked until a human accepts. Details in [evidence/mvp5-win11.md](
 | Independent code + security review, findings fixed | DONE; residual limits listed in SECURITY.md |
 | Network share / symlink-to-UNC / cloud placeholder / mapped drive refusal | Implemented and code-reviewed; **NOT TESTED** on real objects |
 | Elevated run, Windows Server, second machine | NOT TESTED |
-| Policy authenticity (signed policy, HANDOFF section H) | **Not implemented**: unsigned local file; deferred |
+| Policy authenticity (signed policy, HANDOFF section H) | **NOT MET.** Signing is deferred to MVP-7 (Center). Now: `policy_sha256` (SHA-256 of the exact bytes read, or `builtin:...`) identifies the file, and `n/7 rules covered` makes omissions visible. Neither is a signature |
+| Policy cannot be looser than audit | PASS: `max_signature_age_days` is 1..3 (the audit's 3); 4, 365 etc. are policy errors (exit 2), unit + e2e |

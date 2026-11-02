@@ -5,6 +5,7 @@
 
 #include "cli.hpp"
 #include "json.hpp"
+#include "sha256.hpp"
 
 namespace metasec {
 
@@ -54,6 +55,7 @@ Policy default_policy() {
     PolicyParseResult r = parse_policy(default_policy_json());
     Policy p = std::move(r.policy);
     p.source = "built-in";
+    p.sha256 = "builtin:" + p.policy_id + ":v" + std::to_string(p.policy_version);
     return p;
 }
 
@@ -103,7 +105,8 @@ PolicyParseResult parse_rule(const JsonValue& v, std::size_t index, PolicyRule& 
             return fail(at + "max_signature_age_days is only valid for " + std::string(kSignatureAgeRule));
         if (!is_int_in(*age, kMinSignatureAgeParam, kMaxSignatureAgeParam))
             return fail(at + "max_signature_age_days must be an integer from " + std::to_string(kMinSignatureAgeParam) +
-                        " to " + std::to_string(kMaxSignatureAgeParam));
+                        " to " + std::to_string(kMaxSignatureAgeParam) +
+                        " (a policy may only tighten the audit limit, never loosen it)");
         out.max_signature_age_days = static_cast<int>(age->integer);
     }
     PolicyParseResult ok;
@@ -114,6 +117,7 @@ PolicyParseResult parse_rule(const JsonValue& v, std::size_t index, PolicyRule& 
 }  // namespace
 
 PolicyParseResult parse_policy(std::string_view text) {
+    const std::string_view original = text;
     if (text.size() > kMaxPolicyBytes) return fail("policy is larger than " + std::to_string(kMaxPolicyBytes) + " bytes");
     if (text.size() >= 3 && static_cast<unsigned char>(text[0]) == 0xEF && static_cast<unsigned char>(text[1]) == 0xBB &&
         static_cast<unsigned char>(text[2]) == 0xBF)
@@ -150,6 +154,7 @@ PolicyParseResult parse_policy(std::string_view text) {
     out.policy.policy_id = id->string;
     out.policy.policy_version = static_cast<int>(version->integer);
     out.policy.source = "file";
+    out.policy.sha256 = sha256_hex(original);  // the exact bytes as read, before BOM stripping
     std::set<std::string> seen;
     for (std::size_t i = 0; i < rules->array.size(); ++i) {
         PolicyRule rule;
@@ -211,6 +216,9 @@ PolicyReport evaluate_policy(const Policy& policy, const AuditReport& audit) {
     r.policy_id = policy.policy_id;
     r.policy_version = policy.policy_version;
     r.policy_source = policy.source;
+    r.policy_sha256 = policy.sha256;
+    r.rules_covered = static_cast<int>(policy.rules.size());
+    r.rules_total = static_cast<int>(known_policy_rule_ids().size());
     for (const PolicyRule& pr : policy.rules) {
         PolicyRuleResult res;
         res.rule_id = pr.rule_id;
@@ -259,10 +267,10 @@ PolicyReport evaluate_policy(const Policy& policy, const AuditReport& audit) {
                         res.verdict = PolicyVerdict::Incomplete;
                         res.detail = "the audit reported no usable signature age, so the policy limit cannot be checked";
                     } else {
-                        // The policy limit overrides the audit's own threshold; say so, so that a verdict
-                        // that differs from observed.result is never unexplained.
+                        // The policy limit is at most the audit's threshold (it can only tighten), so a verdict
+                        // can be stricter than observed.result but never looser; say so when they differ.
                         const std::string note = " (policy limit " + std::to_string(*pr.max_signature_age_days) +
-                                                 " day(s) replaces the audit threshold of " + std::to_string(kSignatureMaxAgeDays) +
+                                                 " day(s), audit threshold " + std::to_string(kSignatureMaxAgeDays) +
                                                  "; the audit itself says " + to_string(f->result) + ")";
                         if (days <= *pr.max_signature_age_days) {
                             res.verdict = PolicyVerdict::Compliant;

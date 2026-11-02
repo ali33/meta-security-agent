@@ -16,6 +16,7 @@ add_library(metasec_core STATIC
   src/core/watch.cpp
   src/core/scan.cpp
   src/core/policy.cpp
+  src/core/sha256.cpp
   src/core/render.cpp
   src/core/cli.cpp)
 target_include_directories(metasec_core PUBLIC src)

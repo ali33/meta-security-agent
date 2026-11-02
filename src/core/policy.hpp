@@ -23,7 +23,9 @@ inline constexpr std::size_t kMaxPolicyRules = 32;
 inline constexpr int kMaxPolicyId = 64;
 inline constexpr int kMaxPolicyVersion = 1000000;
 inline constexpr int kMinSignatureAgeParam = 1;
-inline constexpr int kMaxSignatureAgeParam = 365;
+// A policy may only TIGHTEN the audit's signature-age limit, never loosen it: the maximum is the
+// audit's own kSignatureMaxAgeDays. A larger value is a policy error.
+inline constexpr int kMaxSignatureAgeParam = static_cast<int>(kSignatureMaxAgeDays);
 inline constexpr const char* kSignatureAgeRule = "META-AV-004";
 
 // Rule ids a policy may name (exactly the rules run_audit produces, same order).
@@ -32,8 +34,8 @@ const std::vector<std::string>& known_policy_rule_ids();
 struct PolicyRule {
     std::string rule_id;
     // META-AV-004 only: the policy's own limit for signature age. Absent = the audit's built-in limit.
-    // When present it REPLACES the audit's threshold (it may be looser or stricter), so the verdict can
-    // differ from the audit's result; the report's `detail` says so.
+    // When present it is between 1 and the audit's own threshold (it can only tighten), so the verdict
+    // can be stricter than the audit's result, never looser; the report's `detail` says so.
     std::optional<int> max_signature_age_days;
 };
 
@@ -41,6 +43,10 @@ struct Policy {
     std::string policy_id;
     int policy_version = 0;
     std::string source;  // "built-in" or "file" (never a path: paths can carry user names)
+    // Identity of the exact bytes this policy was parsed from: SHA-256 hex of the file bytes as read
+    // (BOM included), or "builtin:<policy_id>:v<policy_version>" for the built-in baseline. Identification
+    // only, NOT a signature: it proves nothing about who wrote the file.
+    std::string sha256;
     std::vector<PolicyRule> rules;
 };
 
@@ -91,6 +97,11 @@ struct PolicyReport {
     std::string policy_id;
     int policy_version = 0;
     std::string policy_source;
+    std::string policy_sha256;
+    // Coverage: how many of the audit's rules this policy names (n of total). A policy that omits
+    // rules is only as strict as its author; this makes the omission visible.
+    int rules_covered = 0;
+    int rules_total = 0;
     std::vector<PolicyRuleResult> rules;
 };
 

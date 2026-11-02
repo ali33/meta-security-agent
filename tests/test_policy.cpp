@@ -13,6 +13,7 @@
 #include "core/json.hpp"
 #include "core/policy.hpp"
 #include "core/render.hpp"
+#include "core/sha256.hpp"
 #include "core/types.hpp"
 
 using namespace metasec;
@@ -117,12 +118,17 @@ void test_parse_valid() {
     // BOM, whitespace, key order
     CHECK(parse_policy("\xEF\xBB\xBF " + doc(kOneRule) + "\n").ok);
     CHECK(parse_policy("{\"rules\":" + kOneRule + ",\"policy_version\":7,\"policy_id\":\"A.b_c-1\",\"schema_version\":1}").ok);
-    const auto r = parse_policy(doc("[{\"rule_id\":\"META-AV-004\",\"expect\":\"PASS\",\"max_signature_age_days\":7}]"));
-    CHECK(r.ok && r.policy.rules.size() == 1 && r.policy.rules[0].max_signature_age_days == 7);
+    const auto r = parse_policy(doc("[{\"rule_id\":\"META-AV-004\",\"expect\":\"PASS\",\"max_signature_age_days\":2}]"));
+    CHECK(r.ok && r.policy.rules.size() == 1 && r.policy.rules[0].max_signature_age_days == 2);
     CHECK(r.ok && r.policy.source == "file");
     // limits are inclusive
     CHECK(parse_policy(doc("[{\"rule_id\":\"META-AV-004\",\"expect\":\"PASS\",\"max_signature_age_days\":1}]")).ok);
-    CHECK(parse_policy(doc("[{\"rule_id\":\"META-AV-004\",\"expect\":\"PASS\",\"max_signature_age_days\":365}]")).ok);
+    CHECK(parse_policy(doc("[{\"rule_id\":\"META-AV-004\",\"expect\":\"PASS\",\"max_signature_age_days\":3}]")).ok);  // = audit limit
+    // A policy can only TIGHTEN the audit limit: anything above kSignatureMaxAgeDays (3) is an error.
+    for (const char* loose : {"4", "5", "7", "30", "365", "366"}) {
+        const auto lr = parse_policy(doc(std::string("[{\"rule_id\":\"META-AV-004\",\"expect\":\"PASS\",\"max_signature_age_days\":") + loose + "}]"));
+        CHECK(!lr.ok && lr.error.find("only tighten") != std::string::npos && lr.error.find("1 to 3") != std::string::npos);
+    }
     CHECK(parse_policy("{\"schema_version\":1,\"policy_id\":\"" + std::string(64, 'a') + "\",\"policy_version\":1000000,\"rules\":" + kOneRule + "}").ok);
     // all seven rules, at the maximum allowed size of a whitespace-padded file
     std::string padded = doc(kOneRule);
@@ -216,7 +222,7 @@ void test_parse_hostile() {
     expect_reject(doc("[{\"rule_id\":\"META-FW-001\",\"expect\":\"PASS\"},{\"rule_id\":\"META-FW-001\",\"expect\":\"PASS\"}]"), "duplicate rule");
     // parameter misuse
     expect_reject(doc("[{\"rule_id\":\"META-FW-001\",\"expect\":\"PASS\",\"max_signature_age_days\":3}]"), "param on the wrong rule");
-    for (const char* bad : {"0", "-1", "366", "3.5", "3e0", "\"3\"", "null", "true", "99999999999999999999", "[]"})
+    for (const char* bad : {"0", "-1", "4", "365", "366", "3.5", "3e0", "\"3\"", "null", "true", "99999999999999999999", "[]"})
         expect_reject(doc(std::string("[{\"rule_id\":\"META-AV-004\",\"expect\":\"PASS\",\"max_signature_age_days\":") + bad + "}]"), bad);
     // too many rules (more than the 32 allowed, even though ids repeat -> rejected either way)
     {
@@ -318,9 +324,13 @@ void test_signature_limit() {
     CHECK(verdict(sig_audit(RuleResult::Pass, "2"), 3) == PolicyVerdict::Compliant);
     CHECK(verdict(sig_audit(RuleResult::Pass, "3"), 3) == PolicyVerdict::Compliant);  // inclusive
     CHECK(verdict(sig_audit(RuleResult::Fail, "4"), 3) == PolicyVerdict::Drift);
-    // The policy's limit overrides the audit's built-in limit in both directions.
-    CHECK(verdict(sig_audit(RuleResult::Fail, "5"), 7) == PolicyVerdict::Compliant);
+    // The policy's limit can only tighten: stricter than the audit's PASS, never looser than its FAIL.
     CHECK(verdict(sig_audit(RuleResult::Pass, "2"), 1) == PolicyVerdict::Drift);
+    CHECK(verdict(sig_audit(RuleResult::Pass, "3"), 2) == PolicyVerdict::Drift);
+    CHECK(verdict(sig_audit(RuleResult::Pass, "2"), 2) == PolicyVerdict::Compliant);
+    for (int age = 4; age <= 400; ++age)  // audit FAIL (age > 3): no admissible limit (1..3) makes it COMPLIANT
+        for (int limit = kMinSignatureAgeParam; limit <= kMaxSignatureAgeParam; ++limit)
+            CHECK(verdict(sig_audit(RuleResult::Fail, std::to_string(age).c_str()), limit) == PolicyVerdict::Drift);
     // No usable age: INCOMPLETE, even if the audit said PASS.
     CHECK(verdict(sig_audit(RuleResult::Pass, nullptr), 3) == PolicyVerdict::Incomplete);
     CHECK(verdict(sig_audit(RuleResult::Fail, nullptr), 3) == PolicyVerdict::Incomplete);
@@ -425,20 +435,20 @@ void test_end_to_end_drift() {
         CHECK(policy_overall(r) == PolicyOverall::Incomplete);
     }
     {
-        // Policy asks for a looser signature limit than the audit: 5 days old is fine for the policy.
+        // A policy stricter than the audit: signatures 3 days old pass the audit (limit 3) but drift under
+        // a policy limit of 2. The difference is explained, never silent.
         AuditInput in = healthy_machine();
         for (auto& c : in.status.checks)
             if (c.check_id == kIdDefenderAv)
                 for (auto& [k, v] : c.evidence)
-                    if (k == "signature_age_days") v = "5";
+                    if (k == "signature_age_days") v = "3";
         const AuditReport a = run_audit(in);
-        const PolicyRuleResult* strict = by_id(evaluate_policy(default_policy(), a), "META-AV-004");
-        CHECK(strict && strict->verdict == PolicyVerdict::Drift);
-        const PolicyReport loose = evaluate_policy(policy_of({{"META-AV-004", 7}}), a);
-        CHECK(loose.rules[0].verdict == PolicyVerdict::Compliant);
-        // the override is explained, never silent: the audit's own result and threshold are in the detail
-        CHECK(loose.rules[0].detail.find("replaces the audit threshold of 3") != std::string::npos);
-        CHECK(loose.rules[0].detail.find("audit itself says FAIL") != std::string::npos);
+        const PolicyRuleResult* dflt = by_id(evaluate_policy(default_policy(), a), "META-AV-004");
+        CHECK(dflt && dflt->verdict == PolicyVerdict::Compliant);
+        const PolicyReport strict = evaluate_policy(policy_of({{"META-AV-004", 2}}), a);
+        CHECK(strict.rules[0].verdict == PolicyVerdict::Drift);
+        CHECK(strict.rules[0].detail.find("audit threshold 3") != std::string::npos);
+        CHECK(strict.rules[0].detail.find("audit itself says PASS") != std::string::npos);
     }
 }
 
@@ -455,6 +465,53 @@ void test_paths() {
     CHECK(!valid_policy_path(std::string(261, 'a')));
     std::string why;
     CHECK(!valid_policy_path("\\\\x\\y", &why) && !why.empty());
+}
+
+// ---- identity (SHA-256) and coverage --------------------------------------------------------------
+
+void test_sha_and_coverage() {
+    // FIPS 180-4 / NIST known answers
+    CHECK(sha256_hex("") == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    CHECK(sha256_hex("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    CHECK(sha256_hex("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq") ==
+          "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
+    CHECK(sha256_hex(std::string(1000000, 'a')) == "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0");
+    // padding boundaries: lengths 55, 56, 63, 64, 65 all produce 64 hex characters and differ pairwise
+    std::set<std::string> seen;
+    for (std::size_t n : {55u, 56u, 63u, 64u, 65u, 119u, 120u}) {
+        const std::string h = sha256_hex(std::string(n, 'x'));
+        CHECK(h.size() == 64);
+        CHECK(seen.insert(h).second);
+    }
+    CHECK(sha256_hex(std::string(55, 'a')) == "9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318");
+    CHECK(sha256_hex(std::string(56, 'a')) == "b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a");
+    CHECK(sha256_hex(std::string(64, 'a')) == "ffe054fe7ae0cb6dc65c3af9b61d5209f439851db43d0ba5997337df154668eb");
+
+    // The hash is over the exact bytes read (BOM and whitespace included), file source only.
+    const std::string text = doc(kOneRule);
+    const auto a = parse_policy(text);
+    const auto b = parse_policy(text);
+    const auto c = parse_policy(text + " ");
+    const auto d = parse_policy("\xEF\xBB\xBF" + text);
+    CHECK(a.ok && b.ok && c.ok && d.ok);
+    CHECK(a.policy.sha256 == sha256_hex(text) && a.policy.sha256 == b.policy.sha256);
+    CHECK(c.policy.sha256 != a.policy.sha256 && d.policy.sha256 == sha256_hex("\xEF\xBB\xBF" + text));
+    CHECK(a.policy.sha256.size() == 64);
+    // built-in baseline: an identifier, not a hash of a file
+    CHECK(default_policy().sha256 == "builtin:meta-default-baseline:v1");
+    // a rejected document carries no identity
+    CHECK(parse_policy("{").policy.sha256.empty());
+
+    // Coverage: named rules out of the audit's rules, in the report.
+    const AuditReport all = audit_all(RuleResult::Pass);
+    const PolicyReport full = evaluate_policy(default_policy(), all);
+    CHECK(full.rules_covered == 7 && full.rules_total == 7 && full.policy_sha256 == "builtin:meta-default-baseline:v1");
+    const PolicyReport part = evaluate_policy(policy_of({{"META-FW-001", std::nullopt}, {"META-AV-001", std::nullopt}}), all);
+    CHECK(part.rules_covered == 2 && part.rules_total == 7);
+    const std::string t = render_policy_text(part, "1");
+    CHECK(t.find("Coverage: 2/7 rules covered (rules not named by the policy are NOT checked)") != std::string::npos);
+    const std::string j = render_policy_json(part, "1");
+    CHECK(j.find("\"coverage\":{\"rules_covered\":2,\"rules_total\":7}") != std::string::npos);
 }
 
 // ---- CLI parsing --------------------------------------------------------------------------------
@@ -532,8 +589,14 @@ void test_render() {
         const JsonValue* pol = jp.value.find("policy");
         CHECK(pol && pol->find("source") && pol->find("source")->string == "built-in");
         // No file path anywhere: the policy block has exactly these keys.
-        CHECK(pol && pol->object.size() == 4);
+        CHECK(pol && pol->object.size() == 5);
+        CHECK(pol && pol->find("policy_sha256") && pol->find("policy_sha256")->string == "builtin:meta-default-baseline:v1");
+        const JsonValue* cov = jp.value.find("coverage");
+        CHECK(cov && cov->find("rules_covered") && cov->find("rules_covered")->integer == 7 &&
+              cov->find("rules_total") && cov->find("rules_total")->integer == 7);
     }
+    CHECK(render_policy_text(r, "9.9.9").find("Coverage: 7/7 rules covered") != std::string::npos);
+    CHECK(render_policy_text(r, "9.9.9").find("Policy SHA-256: builtin:meta-default-baseline:v1") != std::string::npos);
     const std::string t = render_policy_text(r, "9.9.9");
     CHECK(t.find("[DRIFT] META-FW-003") != std::string::npos);
     CHECK(t.find("expected: PASS") != std::string::npos && t.find("observed: FAIL") != std::string::npos);
@@ -561,6 +624,7 @@ int main(int argc, char** argv) {
     test_overall_and_exit();
     test_end_to_end_drift();
     test_paths();
+    test_sha_and_coverage();
     test_args();
     test_render();
     std::printf("%d checks, %d failed\n", g_checks, g_failed);
