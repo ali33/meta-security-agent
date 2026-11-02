@@ -112,3 +112,21 @@ Boxes stay unchecked until a human accepts. Details in [evidence/mvp4-win11.md](
 | LocalService can read Defender WMI/firewall | **NOT MEASURED** |
 | Install/uninstall Event Log record | **NOT TESTED** (needs admin) |
 | Windows Server, second machine | NOT TESTED |
+
+
+## MVP-5 status record (2026-11-02, branch `feat/mvp5-policy`, from `main` at `146e95e`)
+Boxes stay unchecked until a human accepts. Details in [evidence/mvp5-win11.md](evidence/mvp5-win11.md).
+
+| Item (HANDOFF section F, MVP 5: "Evidence-backed drift report for known rule violation") | Result |
+|---|---|
+| `meta-sec policy check` exists; per rule: expected, observed + evidence, data source, verdict | PASS on Windows 11 (built-in baseline: 5 COMPLIANT, 2 NOT_APPLICABLE, exit 0) |
+| Read-only: no remediation, no network, no scan/service | PASS by design and by tests (no write flag exists; bad flags exit 2) |
+| Versioned, strict baseline format; unknown keys and rule ids rejected; built-in default | PASS (`policy_unit` 5,379 checks incl. ~150 hostile policies; `cli_policy_bad_files`) |
+| Unobservable rule is INCOMPLETE, never COMPLIANT (also: missing rule, nothing verified) | PASS (invariant sweep, unit) |
+| Malformed / oversized / hostile policy files: exit 2, no partial report, path not echoed | PASS on the real binary (14 file cases incl. 70,000-byte file, directory, `NUL`, junction in path) |
+| Known rule violation yields DRIFT with evidence, exit 1 | PASS with **fake machine states** (`test_end_to_end_drift`). **NOT produced on a real machine** (no setting may be weakened) |
+| Exit codes 0 / 1 / 2 / 3 (1 outranks 3) | PASS (unit and e2e) |
+| Independent code + security review, findings fixed | DONE; residual limits listed in SECURITY.md |
+| Network share / symlink-to-UNC / cloud placeholder / mapped drive refusal | Implemented and code-reviewed; **NOT TESTED** on real objects |
+| Elevated run, Windows Server, second machine | NOT TESTED |
+| Policy authenticity (signed policy, HANDOFF section H) | **Not implemented**: unsigned local file; deferred |
