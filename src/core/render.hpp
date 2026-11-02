@@ -3,6 +3,7 @@
 #include <string>
 
 #include "audit.hpp"
+#include "policy.hpp"
 #include "types.hpp"
 
 namespace metasec {
@@ -22,5 +23,9 @@ std::string render_status_text(const StatusReport& r, const std::string& version
 // Audit report. JSON is one line with its own document type ("command":"audit", schema_version 1).
 std::string render_audit_json(const AuditReport& r, const std::string& version);
 std::string render_audit_text(const AuditReport& r, const std::string& version);
+
+// Policy drift report (MVP-5). The policy file path is never printed (it can contain a user name).
+std::string render_policy_json(const PolicyReport& r, const std::string& version);
+std::string render_policy_text(const PolicyReport& r, const std::string& version);
 
 }  // namespace metasec

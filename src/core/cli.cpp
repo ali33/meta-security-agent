@@ -1,5 +1,6 @@
 #include "cli.hpp"
 
+#include "policy.hpp"
 #include "render.hpp"
 #include "watch.hpp"
 
@@ -228,6 +229,58 @@ ParsedArgs parse_service(const std::vector<std::string_view>& args) {
     return p;
 }
 
+// policy check [--policy-file PATH] [--json] | policy default: read-only; same strictness as the other commands.
+ParsedArgs parse_policy_cmd(const std::vector<std::string_view>& args) {
+    ParsedArgs p;
+    if (args.size() < 2) {
+        p.error = "policy needs a sub-command: check or default";
+        return p;
+    }
+    const std::string_view sub = args[1];
+    if (sub == "default") {
+        if (args.size() != 2) {
+            p.error = "unexpected argument: " + sanitize_for_display(args[2]);
+            return p;
+        }
+        p.policy = PolicyCommand::Default;
+        p.command = Command::Policy;
+        return p;
+    }
+    if (sub != "check") {
+        p.error = "unknown policy sub-command: " + sanitize_for_display(sub);
+        return p;
+    }
+    bool seen_file = false;
+    for (std::size_t i = 2; i < args.size(); ++i) {
+        if (args[i] == "--json" && !p.json) {
+            p.json = true;
+        } else if (args[i] == "--policy-file") {
+            if (seen_file) {
+                p.error = "duplicate argument: --policy-file";
+                return p;
+            }
+            if (i + 1 >= args.size() || args[i + 1].substr(0, 2) == "--") {
+                p.error = "--policy-file needs a value";
+                return p;
+            }
+            std::string why;
+            if (!valid_policy_path(args[i + 1], &why)) {
+                p.error = "--policy-file: " + why;
+                return p;
+            }
+            p.policy_file = std::string(args[i + 1]);
+            seen_file = true;
+            ++i;
+        } else {
+            p.error = "unexpected argument: " + sanitize_for_display(args[i]);
+            return p;
+        }
+    }
+    p.policy = PolicyCommand::Check;
+    p.command = Command::Policy;
+    return p;
+}
+
 }  // namespace
 
 ParsedArgs parse_args(const std::vector<std::string_view>& args) {
@@ -268,6 +321,7 @@ ParsedArgs parse_args(const std::vector<std::string_view>& args) {
     if (cmd == "watch") return parse_watch(args);
     if (cmd == "scan") return parse_scan(args);
     if (cmd == "service") return parse_service(args);
+    if (cmd == "policy") return parse_policy_cmd(args);
     p.error = "unknown command: " + sanitize_for_display(cmd);
     return p;
 }
@@ -289,9 +343,12 @@ std::string usage_text(const std::string& version) {
            "                             Install/remove the background service after typed local approval (Administrator)\n"
            "  meta-sec service run --console [--data-dir PATH] [--pipe-name NAME] [--interval S] [--confirm N] [--max-polls N]\n"
            "                             Run the observer in this console (development; Ctrl+C stops)\n"
+           "  meta-sec policy check [--policy-file PATH] [--json]\n"
+           "                             Compare this machine with a local baseline policy (built-in unless --policy-file); read-only\n"
+           "  meta-sec policy default    Print the built-in baseline policy (JSON) to copy and edit\n"
            "  meta-sec --version\n"
            "  meta-sec --help\n"
-           "Exit codes: 0 ok, 1 audit violation, 2 command/engine error, "
+           "Exit codes: 0 ok, 1 audit violation or policy drift, 2 command/engine error, "
            "3 incomplete observation (watch: judged on the last poll; scan: not confirmed), "
            "4 scan/service change refused (not applicable or not approved)\n";
 }

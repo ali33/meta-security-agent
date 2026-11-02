@@ -199,4 +199,95 @@ std::string render_audit_text(const AuditReport& r, const std::string& version) 
     return o;
 }
 
+std::string render_policy_json(const PolicyReport& r, const std::string& version) {
+    std::string o;
+    o += '{';
+    o += "\"schema_version\":" + std::to_string(kSchemaVersion) + ',';
+    put_kv(o, "command", "policy check"); o += ',';
+    put_kv(o, "product", kProduct); o += ',';
+    put_kv(o, "version", version); o += ',';
+    put_kv(o, "mode", "standalone"); o += ',';
+    put_kv(o, "hostname", r.hostname); o += ',';
+    put_kv(o, "observed_at_utc", r.observed_at_utc); o += ',';
+    o += "\"platform\":{";
+    put_kv(o, "os", r.platform.os); o += ',';
+    put_kv(o, "version", r.platform.version); o += ',';
+    put_kv(o, "kind", r.platform.kind);
+    o += "},\"policy\":{\"policy_schema_version\":" + std::to_string(kPolicySchemaVersion) + ',';
+    put_kv(o, "policy_id", r.policy_id); o += ',';
+    o += "\"policy_version\":" + std::to_string(r.policy_version) + ',';
+    put_kv(o, "source", r.policy_source);
+    o += "},\"rules\":[";
+    bool first = true;
+    for (const auto& x : r.rules) {
+        if (!first) o += ',';
+        first = false;
+        o += '{';
+        put_kv(o, "rule_id", x.rule_id); o += ',';
+        o += "\"rule_version\":" + std::to_string(x.rule_version) + ',';
+        put_kv(o, "title", x.title); o += ',';
+        put_kv(o, "severity", to_string(x.severity)); o += ',';
+        o += "\"expected\":{\"result\":\"PASS\"";
+        if (x.max_signature_age_days) o += ",\"max_signature_age_days\":" + std::to_string(*x.max_signature_age_days);
+        o += "},\"observed\":{";
+        put_kv(o, "result", to_string(x.observed));
+        o += ",\"evidence\":{";
+        bool fe = true;
+        for (const auto& [k, v] : x.evidence) {
+            if (!fe) o += ',';
+            fe = false;
+            put_kv(o, k, v);
+        }
+        o += "}},";
+        put_kv(o, "verdict", to_string(x.verdict)); o += ',';
+        put_kv(o, "detail", x.detail); o += ',';
+        put_kv(o, "remediation", x.remediation);
+        o += ",\"provenance\":{\"check_ids\":";
+        put_str_array(o, x.check_ids);
+        o += ",\"sources\":";
+        put_str_array(o, x.sources);
+        o += "}}";
+    }
+    const PolicySummary s = summarize(r);
+    o += "],\"summary\":{";
+    o += "\"compliant\":" + std::to_string(s.compliant) + ',';
+    o += "\"drift\":" + std::to_string(s.drift) + ',';
+    o += "\"incomplete\":" + std::to_string(s.incomplete) + ',';
+    o += "\"not_applicable\":" + std::to_string(s.not_applicable) + "},";
+    put_kv(o, "overall", to_string(policy_overall(r)));
+    o += "}\n";
+    return o;
+}
+
+std::string render_policy_text(const PolicyReport& r, const std::string& version) {
+    std::string o;
+    o += std::format("{} v{} | Standalone | Read-only | Policy check\n", kProduct, version);
+    o += std::format("Host: {}\n", r.hostname);
+    o += std::format("Platform: {} {} ({})\n", r.platform.os, r.platform.version, r.platform.kind);
+    o += std::format("Observed: {}\n", r.observed_at_utc);
+    o += std::format("Policy: {} v{} ({})\n", printable(r.policy_id), r.policy_version, printable(r.policy_source));
+    for (const auto& x : r.rules) {
+        std::string expected = "PASS";
+        if (x.max_signature_age_days) expected += std::format(" (signature age <= {} days)", *x.max_signature_age_days);
+        o += std::format("[{}] {} (v{}, {}) {}\n", to_string(x.verdict), x.rule_id, x.rule_version,
+                         to_string(x.severity), printable(x.title));
+        o += std::format("      expected: {}\n      observed: {}\n      why: {}\n", expected, to_string(x.observed),
+                         printable(x.detail));
+        for (const auto& [k, v] : x.evidence) o += std::format("      {}: {}\n", printable(k), printable(v));
+        if (!x.sources.empty()) {
+            std::string src;
+            for (const auto& sc : x.sources) src += (src.empty() ? "" : "; ") + printable(sc);
+            o += std::format("      source: {}\n", src);
+        }
+        if (x.verdict == PolicyVerdict::Drift || x.verdict == PolicyVerdict::Incomplete)
+            o += std::format("      fix: {}\n", printable(x.remediation));
+    }
+    const PolicySummary s = summarize(r);
+    o += std::format("Summary: {} compliant, {} drift, {} incomplete, {} not applicable\n", s.compliant, s.drift,
+                     s.incomplete, s.not_applicable);
+    o += std::format("Overall: {} (drift from the local baseline policy, not a malware scan or a protection guarantee)\n",
+                     to_string(policy_overall(r)));
+    return o;
+}
+
 }  // namespace metasec
