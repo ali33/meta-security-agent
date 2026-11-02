@@ -5,7 +5,10 @@
 
 namespace metasec {
 
-enum class Command { Help, Version, Status, Audit, Watch, Scan, Service, Invalid };
+enum class Command { Help, Version, Status, Audit, Watch, Scan, Service, Policy, Invalid };
+
+// `policy <sub>` (MVP-5). Both are read-only.
+enum class PolicyCommand { None, Check, Default };
 
 // `service <sub>` (MVP-4). `Run` is the foreground observer (--console) or the SCM entry (--scm).
 enum class ServiceCommand { None, Status, Events, Install, Uninstall, Run };
@@ -31,6 +34,9 @@ struct ParsedArgs {
     bool scm = false;                 // service run --scm (started by the Service Control Manager; internal)
     std::string data_dir;             // service run --console --data-dir (empty = default location)
     std::string pipe_name;            // --pipe-name (empty = default); status/events/run --console
+    // policy only
+    PolicyCommand policy = PolicyCommand::None;
+    std::string policy_file;  // policy check --policy-file PATH (empty = built-in baseline)
     std::string error;  // set when command == Invalid
 };
 

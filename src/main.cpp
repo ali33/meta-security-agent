@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "core/cli.hpp"
+#include "core/policy.hpp"
 #include "core/render.hpp"
 #include "core/scan.hpp"
 #include "core/service_install.hpp"
@@ -19,6 +20,7 @@
 #include "core/watch.hpp"
 #include "win/collect.hpp"
 #include "win/ipc_win.hpp"
+#include "win/policy_file_win.hpp"
 #include "win/scm_win.hpp"
 #include "win/service_win.hpp"
 
@@ -100,6 +102,43 @@ int run_audit_command(bool json, const std::string& version) {
         return kExitError;
     }
     return audit_exit_code(audit_overall(report));
+}
+
+// ---- policy (MVP-5): read-only comparison of the audit with a local baseline -------------------------
+
+int run_policy_command(const metasec::ParsedArgs& parsed, const std::string& version) {
+    using namespace metasec;
+    if (parsed.policy == PolicyCommand::Default) return write_stdout(default_policy_json()) ? kExitOk : kExitError;
+
+    // The policy is loaded and validated BEFORE anything is observed: a bad policy fails fast, with
+    // nothing on stdout, and never leads to a partial report.
+    Policy policy;
+    if (parsed.policy_file.empty()) {
+        policy = default_policy();
+    } else {
+        const win::PolicyFileRead file = win::read_policy_file(parsed.policy_file);
+        if (!file.ok) {
+            std::cerr << "meta-sec: policy check: " << file.error << "\n";
+            return kExitError;
+        }
+        const PolicyParseResult pr = parse_policy(file.content);
+        if (!pr.ok) {
+            std::cerr << "meta-sec: policy check: invalid policy: " << pr.error << "\n";
+            return kExitError;
+        }
+        policy = pr.policy;
+    }
+
+    win::ComApartment com;
+    if (!init_com(com)) return kExitError;
+    const AuditReport audit = run_audit(win::collect_audit_input(std::chrono::system_clock::now()));
+    const PolicyReport report = evaluate_policy(policy, audit);
+    const std::string out = parsed.json ? render_policy_json(report, version) : render_policy_text(report, version);
+    if (!write_stdout(out)) {
+        std::cerr << "meta-sec: failed to write output\n";
+        return kExitError;
+    }
+    return policy_exit_code(policy_overall(report));
 }
 
 // Ctrl+C / Ctrl+Break / console close only signal g_stop_event; the loop stops at its next check.
@@ -339,6 +378,8 @@ int wmain(int argc, wchar_t** argv) {
                 return run_scan_command(parsed, version);
             case Command::Service:
                 return run_service_command(parsed, version);
+            case Command::Policy:
+                return run_policy_command(parsed, version);
         }
         return kExitError;
     } catch (const std::exception& e) {

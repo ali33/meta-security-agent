@@ -15,6 +15,8 @@ add_library(metasec_core STATIC
   src/core/audit.cpp
   src/core/watch.cpp
   src/core/scan.cpp
+  src/core/policy.cpp
+  src/core/sha256.cpp
   src/core/render.cpp
   src/core/cli.cpp)
 target_include_directories(metasec_core PUBLIC src)
@@ -51,6 +53,7 @@ add_library(metasec_win STATIC
   src/win/datadir_win.cpp
   src/win/ipc_win.cpp
   src/win/scm_win.cpp
+  src/win/policy_file_win.cpp
   src/win/service_win.cpp)
 target_link_libraries(metasec_win PUBLIC metasec_core metasec_store ole32 oleaut32 wbemuuid secur32 advapi32 shell32 bcrypt)
 
@@ -109,6 +112,17 @@ if(BUILD_TESTING)
   endif()
   add_test(NAME scan_unit COMMAND metasec_scan_tests)
 
+  add_executable(metasec_policy_tests tests/test_policy.cpp)
+  target_link_libraries(metasec_policy_tests PRIVATE metasec_core)
+  target_compile_definitions(metasec_policy_tests PRIVATE NOMINMAX)
+  if(MSVC)
+    target_compile_options(metasec_policy_tests PRIVATE /W4 /WX /EHsc /utf-8 /permissive-)
+  endif()
+  add_test(NAME policy_unit COMMAND metasec_policy_tests)
+  add_test(NAME policy_json_roundtrip
+    COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:metasec_policy_tests>
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/policy_json_roundtrip.cmake)
+
   add_executable(metasec_store_tests tests/test_store.cpp)
   target_link_libraries(metasec_store_tests PRIVATE metasec_store sqlite3_vendor)
   target_compile_definitions(metasec_store_tests PRIVATE NOMINMAX)
@@ -159,7 +173,7 @@ if(BUILD_TESTING)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/json_roundtrip.cmake)
 
   # End-to-end tests drive the real executable; JSON validity is checked by CMake's own parser.
-  foreach(mode help version status_text status_json audit_text audit_json audit_bad_flag watch_text watch_json watch_bad_args scan_dry_run scan_json scan_no_approval scan_bad_args service_bad_args service_status service_status_json service_events service_install_dry_run service_install_no_approval service_uninstall service_run_console service_run_bad_args bad_command bad_flag no_args)
+  foreach(mode help version status_text status_json audit_text audit_json audit_bad_flag watch_text watch_json watch_bad_args scan_dry_run scan_json scan_no_approval scan_bad_args service_bad_args service_status service_status_json service_events service_install_dry_run service_install_no_approval service_uninstall service_run_console service_run_bad_args policy_check policy_check_json policy_default policy_bad_args policy_bad_files policy_file_ok bad_command bad_flag no_args)
     add_test(NAME cli_${mode}
       COMMAND ${CMAKE_COMMAND} -DEXE=$<TARGET_FILE:meta-sec> -DMODE=${mode}
               -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_check.cmake)

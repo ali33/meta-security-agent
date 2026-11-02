@@ -2,7 +2,7 @@
 
 Open-source **C++20**, **standalone-first**, **console-first** endpoint security auditing and management toolkit.
 
-**Status: MVP-0 (`status`), MVP-1 (`audit`), MVP-2 (`watch`) and MVP-3 (`scan --quick`), and MVP-4 (`service`) prototype. Not a replacement for antivirus/EDR. Not production-ready.**
+**Status: MVP-0 (`status`), MVP-1 (`audit`), MVP-2 (`watch`) and MVP-3 (`scan --quick`), MVP-4 (`service`) and MVP-5 (`policy check`) prototype. Not a replacement for antivirus/EDR. Not production-ready.**
 
 ## Goals
 - **Run first:** a single `meta-sec.exe` gives real Windows security observations locally without network, Center or database.
@@ -27,6 +27,9 @@ ctest --test-dir build -C Release --output-on-failure
 .\build\Release\meta-sec.exe watch --json
 .\build\Release\meta-sec.exe scan --quick --dry-run     # checks eligibility, starts nothing
 .\build\Release\meta-sec.exe scan --quick               # asks you to type a confirmation first
+.\build\Release\meta-sec.exe policy check               # drift report against the built-in baseline
+.\build\Release\meta-sec.exe policy default > my-policy.json
+.\build\Release\meta-sec.exe policy check --policy-file my-policy.json --json
 ```
 
 `meta-sec status` is read-only and offline. It reports the host name, Windows version, Windows Firewall profile states (`INetFwPolicy2`), the aggregate Windows Security Center antivirus health (`WscGetSecurityProviderHealth`) and Microsoft Defender specific state (WMI `MSFT_MpComputerStatus`: antivirus and real-time protection enabled). WSC health and Defender state are separate checks on purpose: another AV product can make WSC `GOOD` while Defender is `PASSIVE` (not the primary engine). A call that fails is reported as `UNKNOWN` or `NOT_SUPPORTED`, never as a positive state, and the overall result is then `INCOMPLETE` (exit code 3). The overall value summarises the observation; it is not an antivirus protection verdict. Not yet implemented: detections.
@@ -39,7 +42,9 @@ ctest --test-dir build -C Release --output-on-failure
 
 `meta-sec service ...` (MVP-4) adds an optional background observer: the same `meta-sec.exe` runs as a Windows service (`NT AUTHORITY\LocalService`), polls the status checks with the `watch` logic and stores confirmed changes in a local SQLite database under `%ProgramData%\MetaSecAgent` (ACL: SYSTEM/Administrators/service only; capped at 10,000 rows / 16 MiB, oldest rotated out). `service status [--json]` and `service events [--limit N]` read it through a read-only local named pipe (allowlist STATUS/HEALTH/EVENTS, no remote clients), so no elevation is needed to look; with no service installed they say so plainly (exit 0) and `status`/`audit`/`watch`/`scan` keep working standalone. `service install|uninstall` need Administrator rights, a binary under Program Files or Windows, and a typed confirmation on a real console (else exit 4); `--dry-run` shows the plan. `service run --console` runs the observer in the foreground. **Verified here only without admin: foreground observer, store, pipe, status/refusals. Installing the service, running under the Service Control Manager and surviving a reboot were NOT tested.** See [docs/CLI.md](docs/CLI.md), [docs/SECURITY.md](docs/SECURITY.md).
 
-Evidence from a real machine: [MVP-0](docs/evidence/mvp0-win11.md), [MVP-1](docs/evidence/mvp1-win11.md), [MVP-2](docs/evidence/mvp2-win11.md), [MVP-3](docs/evidence/mvp3-win11.md), [MVP-4](docs/evidence/mvp4-win11.md). Windows Server has not been tested.
+`meta-sec policy check` (MVP-5) compares the audit with a **local baseline policy** and prints a drift report: for every rule the expectation, the observed result with its evidence and data source, and a verdict (`COMPLIANT`, `DRIFT`, `INCOMPLETE`, `NOT_APPLICABLE`). It is read-only (no remediation, no network, no scan). Without `--policy-file` it uses a built-in baseline (`meta-sec policy default` prints it so you can copy and edit it). The policy file is a small, versioned JSON document parsed strictly: unknown keys or rule ids, duplicates, wrong types, UNC/device/stream paths and files over 64 KiB are rejected before anything is observed (exit 2). A rule that could not be observed is `INCOMPLETE`, never `COMPLIANT`. Exit `0` no drift, `1` drift (outranks `3`), `3` incomplete, `2` error. **Verified on a Windows 11 machine only against its healthy state and with fake machine states; a real configuration drift was not produced** (no setting was weakened on the lab machine). See [docs/CLI.md](docs/CLI.md).
+
+Evidence from a real machine: [MVP-0](docs/evidence/mvp0-win11.md), [MVP-1](docs/evidence/mvp1-win11.md), [MVP-2](docs/evidence/mvp2-win11.md), [MVP-3](docs/evidence/mvp3-win11.md), [MVP-4](docs/evidence/mvp4-win11.md), [MVP-5](docs/evidence/mvp5-win11.md). Windows Server has not been tested.
 
 
 ## Start here

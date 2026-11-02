@@ -10,6 +10,8 @@ meta-sec.exe audit [--json]
 meta-sec.exe watch [--json] [--interval S] [--max-polls N] [--confirm N]
 meta-sec.exe scan --quick [--dry-run] [--json]
 meta-sec.exe service status|events|install|uninstall|run   (MVP-4, see below)
+meta-sec.exe policy check [--policy-file PATH] [--json]    (MVP-5, see below)
+meta-sec.exe policy default
 ```
 
 Exit codes today: `0` observation complete (`OBSERVED` or `OBSERVED_WITH_ISSUES`), `2` bad arguments or engine failure (diagnostic on stderr, nothing on stdout), `3` incomplete observation (`INCOMPLETE`). `status` never returns 1; `1` is returned by `audit` for a confirmed FAIL (see below).
@@ -184,10 +186,78 @@ SQLite file (`PRAGMA user_version` schema, migrations in a transaction, a newer 
 ### Local IPC protocol (read-only)
 One request line, ASCII, at most 128 bytes: `STATUS`, `HEALTH`, `EVENTS [n]` (n 1..200, default 50), ending in `\n` (or `\r\n`). Nothing else exists: no write, scan, policy or configuration verb. Anything else is rejected with a typed code (`EMPTY_REQUEST`, `REQUEST_TOO_LONG`, `NO_NEWLINE`, `EMBEDDED_NUL`, `NON_ASCII`, `CONTROL_CHARACTER`, `UNKNOWN_COMMAND`, `EXTRA_TOKENS`, `BAD_ARGUMENT`) and the offending bytes are never echoed. The reply is one JSON line (`"command":"service-ipc"`, `schema_version` 1, `ok`, `data` or `error`), at most 256 KiB; `EVENTS` drops the oldest events first and sets `truncated:true`. The client validates every reply strictly and treats an invalid one as "unreachable".
 
+## `policy` (MVP-5, local baseline policy)
+
+```powershell
+meta-sec.exe policy check [--policy-file PATH] [--json]
+meta-sec.exe policy default                      # prints the built-in baseline (JSON) so you can copy and edit it
+```
+`policy check` is **read-only**. It runs the same observation as `audit`, then compares each audit rule with what the baseline policy expects and prints a drift report. It never changes a setting; `remediation` is text for a human (fixing is a later MVP). It makes no network call and starts no scan or service. Without `--policy-file` the built-in baseline is used (`policy_id` `meta-default-baseline`: every audit rule must PASS, signature age limit = the audit's 3 days).
+
+The policy file is **loaded and validated before anything is observed**. A bad policy exits 2 with a diagnostic on stderr and nothing on stdout (never a partial report). The path is never printed in output (it may contain a user name); the report only says `source: built-in` or `file`.
+
+**Exit codes.** `0` no drift and nothing unobserved; `1` at least one rule DRIFTs (confirmed violation of the policy); `3` no drift, but at least one rule is INCOMPLETE; `2` bad arguments, unreadable or invalid policy, or engine failure. **1 outranks 3**, as in `audit`.
+
+### Policy file (schema_version 1)
+```json
+{
+  "schema_version": 1,
+  "policy_id": "meta-default-baseline",
+  "policy_version": 1,
+  "rules": [
+    {"rule_id": "META-FW-001", "expect": "PASS"},
+    {"rule_id": "META-AV-004", "expect": "PASS", "max_signature_age_days": 3}
+  ]
+}
+```
+Strict: JSON object, UTF-8 (a leading BOM is tolerated), at most **64 KiB**, nesting depth 8, **no unknown keys anywhere, no duplicate keys**, no comments or trailing text.
+| Key | Rule |
+|---|---|
+| `schema_version` | integer, exactly `1` (a newer file is refused, not guessed) |
+| `policy_id` | 1-64 characters from `A-Z a-z 0-9 - _ .` |
+| `policy_version` | integer 1..1000000 (chosen by the policy author; shown in the report) |
+| `rules` | array of 1..32 objects; each `rule_id` appears at most once |
+| `rules[].rule_id` | one of the seven audit rules: `META-FW-001..003`, `META-AV-001..004`. Any other id is an error |
+| `rules[].expect` | exactly `"PASS"` (the only expectation in schema 1; a future schema may add more) |
+| `rules[].max_signature_age_days` | optional, **only for `META-AV-004`**, integer **1..3** (3 = the audit's `kSignatureMaxAgeDays`). A policy can only **tighten**, never loosen: any value above 3 is a policy error (exit 2, "a policy may only tighten the audit limit, never loosen it"). The policy limit then decides from the signature age the audit observed (inclusive). Without it the audit's built-in 3-day verdict is used |
+Rules the policy does not list are not checked and not shown.
+
+`--policy-file PATH`: 1-260 characters, no control characters or wildcards, **no UNC (`\\server\share`), device (`\\.\`, `\\?\`) or rooted-without-drive path, no alternate data stream or drive-relative path** (refused by the parser, exit 2). The reader also refuses, before opening: a non-local drive (mapped network drive) and any path component that is a link (symlink/junction); and after opening: anything that is not a regular file (directory, `NUL`/console/pipe), online-only cloud files, and a file over 64 KiB (checked from the size and again while reading). With `max_signature_age_days` the verdict can be **stricter** than `observed.result` (e.g. audit PASS at 3 days, policy limit 2 = DRIFT) but never looser; `detail` says so.
+
+**Identity and coverage.** The report carries `policy.policy_sha256`: the SHA-256 of the exact bytes read from the file (a BOM or any whitespace changes it), or `builtin:meta-default-baseline:v1` for the built-in baseline. It **identifies** the file; it is **not a signature** and proves nothing about who wrote it (signing is deferred to MVP-7, see SECURITY.md). `coverage` = `{"rules_covered":n,"rules_total":7}`: how many audit rules the policy names. Text mode prints `Policy SHA-256: ...` and `Coverage: n/7 rules covered` (with a warning when n < 7: rules not named are not checked).
+
+### Verdicts
+Per rule: `expected` is `PASS` (plus the optional limit); `observed` is the audit's result for that rule with its evidence and provenance.
+| Audit result | Verdict | Meaning |
+|---|---|---|
+| PASS | `COMPLIANT` | matches the expectation |
+| FAIL | `DRIFT` | the machine departs from the baseline |
+| UNKNOWN (could not be observed) | `INCOMPLETE` | **never COMPLIANT** |
+| NOT_APPLICABLE | `NOT_APPLICABLE` | the rule does not apply here (e.g. Defender is not the primary engine) |
+| rule missing from the audit | `INCOMPLETE` | nothing was observed |
+With `max_signature_age_days`: PASS/FAIL are decided by the observed `signature_age_days` against the policy limit (within = COMPLIANT, over = DRIFT); a missing or unparsable age is INCOMPLETE even if the audit said PASS.
+`overall`: `DRIFT` (exit 1), `INCOMPLETE` (exit 3; also when there are no rules **or no rule is COMPLIANT**, e.g. everything NOT_APPLICABLE: nothing was verified), `NO_DRIFT` (exit 0; no drift, nothing unobserved, at least one COMPLIANT). `NO_DRIFT` is a statement about the policy, not a protection guarantee.
+
+### `policy check --json` (own document, `schema_version` 1, `"command":"policy check"`)
+```json
+{"schema_version":1,"command":"policy check","product":"META Security Agent","version":"0.1.0","mode":"standalone",
+ "hostname":"...","observed_at_utc":"...","platform":{"os":"windows","version":"10.0.26200","kind":"client"},
+ "policy":{"policy_schema_version":1,"policy_id":"meta-default-baseline","policy_version":1,"source":"built-in",
+          "policy_sha256":"builtin:meta-default-baseline:v1"},
+ "coverage":{"rules_covered":7,"rules_total":7},
+ "rules":[{"rule_id":"META-FW-003","rule_version":1,"title":"...","severity":"HIGH",
+           "expected":{"result":"PASS"},
+           "observed":{"result":"FAIL","evidence":{"profile":"Public","state":"DISABLED"}},
+           "verdict":"DRIFT","detail":"the policy expects this rule to pass, but it fails","remediation":"...",
+           "provenance":{"check_ids":["firewall.public"],"sources":["INetFwPolicy2"]}}],
+ "summary":{"compliant":6,"drift":1,"incomplete":0,"not_applicable":0},
+ "overall":"DRIFT"}
+```
+Additive changes only. Text mode prints the same facts (`expected:`, `observed:`, `why:`, evidence, `source:`, and `fix:` for DRIFT/INCOMPLETE).
+
 Future:
 ```text
 meta-sec threats list
-meta-sec policy check
 meta-sec fix --dry-run
 meta-sec center join
 meta-sec center status
@@ -196,4 +266,4 @@ meta-center devices list
 meta-center alerts list
 ```
 
-JSON stdout only for `--json`; diagnostics on stderr. Stable schema is described above. Never invent `PROTECTED` from missing observations. Exit: 0 usable read, 1 confirmed audit finding, 2 command error, 3 incomplete observation, 4 refused side-effect action (`scan`, `service install/uninstall`). Commands with side effects require explicit human approval; no arbitrary remote shell.
+JSON stdout only for `--json`; diagnostics on stderr. Stable schema is described above. Never invent `PROTECTED` from missing observations. Exit: 0 usable read, 1 confirmed audit finding or policy drift, 2 command error, 3 incomplete observation, 4 refused side-effect action (`scan`, `service install/uninstall`). Commands with side effects require explicit human approval; no arbitrary remote shell.
